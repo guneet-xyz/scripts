@@ -27,6 +27,11 @@ opt-in Docker upgrade path with the same release.
 Additional checks cover official-repository reuse, opt-in group access, terminal
 colors/spinner, `NO_COLOR`, interactive cancellation, and installation through
 Bash stdin (as used by the documented curl-to-Bash command).
+Neovim checks cover the rice symlink and source layout, user ownership, private
+directory permissions, one-time backups, preservation of local edits, and
+`--no-neovim-config`. Eza aliases are checked for icon flags. Lua syntax and rice's
+core options are checked without downloading/executing its plugin stack; Lazy
+and Mason bootstrap on the user's first normal Neovim launch.
 
 Only the installer folder and this test folder are copied into the container;
 the repository's `.git` directory and other scripts are not copied. The Docker

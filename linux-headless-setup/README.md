@@ -3,6 +3,8 @@
 An idempotent Bash installer for a Debian-based headless machine. It sets up
 **zsh, Starship, zoxide, eza, btop, Neovim, and Docker**, with numbered steps,
 an animated terminal spinner, color-aware status messages, and a persistent log.
+Neovim uses the default profile from [guneet-xyz/rice](https://github.com/guneet-xyz/rice),
+and the managed eza aliases show icons in interactive terminals.
 The UI is native Bash, so it does not need Gum or another bootstrap dependency.
 Redirected output automatically uses readable, non-animated progress messages.
 
@@ -49,6 +51,7 @@ It installs missing APT packages, not a full system upgrade.
 | `--docker-group` | Opt in to Docker access without sudo; **grants root-equivalent privileges**. |
 | `--no-start-docker` | Suppress Docker/containerd start/restart hooks during APT installation and skip explicit service startup. Useful in containers. Does not stop an already-running daemon. |
 | `--upgrade-docker` | Upgrade official Docker packages to the latest APT candidates. Package upgrades may restart Docker and interrupt containers. |
+| `--no-neovim-config` | Keep the existing Neovim configuration; skip the rice checkout and Tree-sitter CLI. |
 | `--docker-codename NAME` | Override the repository suite with the corresponding Debian/Ubuntu base release for a derivative. |
 | `--plain` | No colors or spinner. `NO_COLOR=1` also disables colors. |
 | `--help`, `-h` | Show usage. |
@@ -71,6 +74,8 @@ sudo --preserve-env=GITHUB_TOKEN ./linux-headless-setup/setup.sh --yes --user "$
 | zoxide | Latest stable `ajeetdsouza/zoxide` GitHub release; Linux musl binary. |
 | eza | Latest stable `eza-community/eza` GitHub release; musl on amd64, GNU on arm64. |
 | Neovim | Latest stable `neovim/neovim` GitHub release; full Linux tarball, **not APT or AppImage**. Includes its runtime and needs no FUSE. |
+| Neovim config | The `nvim/.config/nvim` folder from `guneet-xyz/rice`, linked into the target user's `~/.config/nvim`. No other rice packages are installed. |
+| Neovim dependencies | APT `build-essential`, `unzip`, and `ripgrep`, plus the latest official `tree-sitter/tree-sitter` CLI release for amd64/arm64 (SHA-256 verified). |
 | Docker | **Docker's official APT repository**, following its [Debian](https://docs.docker.com/engine/install/debian/#install-using-the-repository) / [Ubuntu](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository) instructions. Installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin`. Never installs the distribution's `docker.io`. |
 
 GitHub assets are checked against their published SHA-256 API digests before
@@ -93,6 +98,12 @@ manage that tool.
 - GitHub tools resolve the current stable release on each run. Existing release
   directories are reused; only new versions are downloaded. Old versions are
   retained rather than automatically deleted.
+- The rice repository is shallow/sparse-cloned as the target user into
+  `~/.local/share/linux-headless-setup/rice`. Existing Neovim configuration is
+  moved to a unique `~/.config/nvim.bak.*` backup before installing the symlink.
+  Reruns reuse the checkout without pulling, resetting, or overwriting local
+  edits, and do not create duplicate backups. All Lua files are syntax-checked
+  as the target user before linking the configuration.
 - Docker's official repository and signing key are configured only as needed.
   Existing official repository definitions are reused to avoid duplicate entries.
   Already-installed official Docker packages are reused unless `--upgrade-docker`
@@ -109,8 +120,9 @@ manage that tool.
   backup is created **only when an existing file needs to change**.
 - Shell integration lives in `~/.config/linux-headless-setup/zshrc`. It configures
   history, completion, Starship, zoxide's `z` command, `EDITOR`/`VISUAL` defaults,
-  and `ls`/`ll`/`la`/`lt` aliases for eza. Existing aliases and editor choices are
-  respected. Put personal edits in `.zshrc`, not the generated integration file.
+  and `ls`/`ll`/`la`/`lt` aliases for eza with `--icons=auto` (icons on a TTY,
+  plain output when piped). Existing aliases and editor choices are respected.
+  Put personal edits in `.zshrc`, not the generated integration file.
 - zsh becomes the login shell unless disabled. Docker group membership is never
   granted unless you explicitly pass `--docker-group`.
 - Logs are retained at `/var/log/linux-headless-setup.*.log`, readable only by
@@ -119,8 +131,42 @@ manage that tool.
 The shell integration assumes the standard `$HOME/.zshrc` location. If you use
 `ZDOTDIR`, source `~/.config/linux-headless-setup/zshrc` from your actual zshrc.
 Remove any pre-existing manual Starship/zoxide initialization if it would
-initialize those tools twice. Existing Neovim and Starship configurations are
-not replaced, and no editor plugins or terminal fonts are installed.
+initialize those tools twice. The existing Starship configuration is not
+replaced, and no terminal fonts are installed on the headless server.
+
+## Neovim config and icons
+
+The installer uses rice's `nvim` **default** profile directly, without requiring
+the easyrice CLI or changing the upstream configuration. The checkout and
+config symlink are user-owned. Use `--no-neovim-config` to opt out.
+
+Tree-sitter's official binaries require newer system libraries on some releases.
+On older hosts such as Debian 12 and Ubuntu 22.04, the installer falls back to
+building the same CLI version as the target user using an isolated, temporary
+Rust/Cargo toolchain. The Rust bootstrap is checksum-verified, Cargo uses its
+locked dependencies and registry checksums, and the temporary toolchain is
+removed on exit without changing shell profiles or existing Rust installations.
+This first-time fallback needs extra downloads, disk space, and several minutes;
+reruns reuse the installed CLI instead of rebuilding it.
+
+Open `nvim` as the target user after setup. The repository's Lazy/Mason bootstrap
+then downloads its plugins and language tools; the installer does not execute
+the plugin configuration as root or repeatedly sync plugins on reruns.
+Language-specific servers and formatters may require additional runtimes such
+as Node.js/npm, Python with virtual-environment support, or Go. Install the
+toolchains needed for the languages you use; they are not all installed globally
+by this script. Use `:Lazy`, `:Mason`, and `:checkhealth` to inspect their status.
+
+To update the config, review your local changes and pull the user-owned checkout:
+
+```bash
+git -C "$HOME/.local/share/linux-headless-setup/rice" pull --ff-only
+```
+
+Both eza icons and rice's Neovim settings expect a **Nerd Font in your local
+terminal/SSH client**. Installing fonts on the headless server would not change
+the font used by your local terminal. Existing custom aliases are not overridden;
+add `--icons=auto` to any personal eza aliases if needed.
 
 ## Docker notes
 

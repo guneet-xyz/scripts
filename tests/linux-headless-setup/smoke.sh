@@ -18,6 +18,9 @@ mkdir -p "$HOME_DIR/dotfiles"
 printf '%s\n' '# Existing user configuration' "alias ll='echo custom-alias'" \
     'export KEEP_EXISTING_CONFIG=yes' >"$HOME_DIR/dotfiles/zshrc"
 ln -s dotfiles/zshrc "$HOME_DIR/.zshrc"
+mkdir -p "$HOME_DIR/.config/nvim" "$HOME_DIR/.local"
+chmod 700 "$HOME_DIR/.config" "$HOME_DIR/.local"
+printf '%s\n' '-- Existing personal Neovim configuration' >"$HOME_DIR/.config/nvim/init.lua"
 chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
 
 # Exercise restoration of an existing service-start policy (including a symlink).
@@ -78,13 +81,24 @@ grep -Fxq 'export KEEP_EXISTING_CONFIG=yes' "$HOME_DIR/.zshrc" || fail 'Existing
 [[ $(stat -c %U "$HOME_DIR/.config/linux-headless-setup/zshrc") == "$USER_NAME" ]] || fail 'Wrong integration-file owner.'
 [[ $(getent passwd "$USER_NAME" | cut -d: -f7) == /usr/bin/zsh ]] || fail 'Login shell was not configured.'
 [[ " $(id -nG "$USER_NAME") " == *' docker '* ]] || fail 'Docker group membership was not granted.'
+RICE_DIR="$HOME_DIR/.local/share/linux-headless-setup/rice"
+[[ -L $HOME_DIR/.config/nvim && $(readlink "$HOME_DIR/.config/nvim") == "$RICE_DIR/nvim/.config/nvim" ]] || fail 'The rice Neovim profile is not linked.'
+[[ $(stat -c %U "$RICE_DIR/.git") == "$USER_NAME" ]] || fail 'The rice checkout is not user-owned.'
+[[ $(stat -c %U "$HOME_DIR/.config/nvim") == "$USER_NAME" ]] || fail 'The Neovim symlink is not user-owned.'
+[[ $(stat -c %a "$HOME_DIR/.config") == 700 && $(stat -c %a "$HOME_DIR/.local") == 700 ]] || fail 'Existing private-directory permissions changed.'
+[[ $(find "$HOME_DIR/.config" -maxdepth 1 -name 'nvim.bak.*' | wc -l) == 1 ]] || fail 'Unexpected number of Neovim config backups.'
+grep -Fx -- '-- Existing personal Neovim configuration' "$HOME_DIR"/.config/nvim.bak.*/init.lua >/dev/null || fail 'The old Neovim config was not backed up.'
+[[ ! -d $RICE_DIR/ghostty && ! -e $HOME_DIR/.config/ghostty ]] || fail 'An unrelated rice package was installed.'
+runuser -u "$USER_NAME" -- git -C "$RICE_DIR" remote get-url origin | grep -Fx 'https://github.com/guneet-xyz/rice.git' >/dev/null || fail 'Wrong rice origin.'
 
 # Expanded by the child zsh, not by this Bash test process.
 # shellcheck disable=SC2016
 runuser -u "$USER_NAME" -- env TERM=xterm zsh -ic '
     [[ $KEEP_EXISTING_CONFIG == yes ]] || exit 1
     [[ $aliases[ll] == "echo custom-alias" ]] || exit 1
-    [[ $aliases[ls] == "eza --group-directories-first" ]] || exit 1
+    [[ $aliases[ls] == "eza --icons=auto --group-directories-first" ]] || exit 1
+    [[ $aliases[la] == "eza -lah --icons=auto --group-directories-first" ]] || exit 1
+    [[ $aliases[lt] == "eza --tree --level=2 --icons=auto" ]] || exit 1
     (( $+functions[z] && $+functions[prompt_starship_precmd] )) || exit 1
     [[ $EDITOR == nvim ]] || exit 1
     [[ $(command -v nvim) == /usr/local/bin/nvim ]] || exit 1
@@ -92,6 +106,14 @@ runuser -u "$USER_NAME" -- env TERM=xterm zsh -ic '
     [[ $PWD == /usr ]] || exit 1
 ' || fail 'Shell integration does not work.'
 runuser -u "$USER_NAME" -- nvim --headless -u NONE -i NONE '+quit'
+# Check the repository's actual settings without bootstrapping network plugins.
+runuser -u "$USER_NAME" -- env RICE_OPTIONS="$HOME_DIR/.config/nvim/lua/custom/options.lua" \
+    nvim --headless -u NONE -i NONE \
+    "+lua dofile(vim.env.RICE_OPTIONS); if vim.g.mapleader ~= ',' or vim.g.have_nerd_font ~= true then vim.cmd('cquit 1') end" '+quit'
+for dependency in cc make unzip rg tree-sitter; do
+    # shellcheck disable=SC2016
+    runuser -u "$USER_NAME" -- sh -c 'command -v "$1"' test "$dependency" >/dev/null || fail "Missing Neovim dependency: $dependency"
+done
 
 for tool in zsh starship zoxide eza btop nvim docker dockerd; do
     "$tool" --version
@@ -145,6 +167,24 @@ script --quiet --return --command \
     /root/cancel.log <<<'n' >/root/cancel-output.log
 grep -Fq 'Cancelled; no changes made.' /root/cancel-output.log || fail 'Cancellation did not work.'
 if grep -Fq $'\033[1;' /root/cancel-output.log; then fail 'NO_COLOR was ignored.'; fi
+
+# Local changes in the user-owned checkout must survive another installer run.
+printf '\n-- Keep this local edit\n' >>"$RICE_DIR/nvim/.config/nvim/lua/custom/options.lua"
+sha256sum "$RICE_DIR/nvim/.config/nvim/lua/custom/options.lua" >/root/local-edit-before.snapshot
+bash "$SETUP" "${ARGS[@]}"
+sha256sum "$RICE_DIR/nvim/.config/nvim/lua/custom/options.lua" >/root/local-edit-after.snapshot
+diff -u /root/local-edit-before.snapshot /root/local-edit-after.snapshot || fail 'Local rice edits were overwritten.'
+[[ $(find "$HOME_DIR/.config" -maxdepth 1 -name 'nvim.bak.*' | wc -l) == 1 ]] || fail 'A rerun created another Neovim backup.'
+
+# Users can opt out without moving or modifying their personal Neovim config.
+useradd --create-home --shell /bin/bash headless-skip
+mkdir -p /home/headless-skip/.config/nvim
+printf '%s\n' '-- Keep this config' >/home/headless-skip/.config/nvim/init.lua
+chown -R headless-skip:headless-skip /home/headless-skip/.config
+bash "$SETUP" --yes --plain --user headless-skip --no-change-shell --no-start-docker --no-neovim-config
+[[ ! -L /home/headless-skip/.config/nvim ]] || fail '--no-neovim-config replaced the config.'
+grep -Fxq -- '-- Keep this config' /home/headless-skip/.config/nvim/init.lua || fail 'The opted-out config changed.'
+[[ ! -e /home/headless-skip/.local/share/linux-headless-setup/rice ]] || fail 'Rice was cloned despite opting out.'
 
 # Protect an unmanaged binary instead of silently overwriting it.
 mv /usr/local/bin/starship /usr/local/bin/starship.managed-test

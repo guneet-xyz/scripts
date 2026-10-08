@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up a Debian-based headless workstation without replacing existing dotfiles.
+# Set up a Debian-based headless workstation, preserving backups of user dotfiles.
 set -Eeuo pipefail
 umask 022
 
@@ -12,6 +12,8 @@ CHANGE_SHELL=1
 DOCKER_GROUP=0
 START_DOCKER=1
 UPGRADE_DOCKER=0
+CONFIGURE_NEOVIM=1
+RICE_REPO=https://github.com/guneet-xyz/rice.git
 DOCKER_CODENAME=''
 TARGET_USER=${SUDO_USER:-$(id -un)}
 WORK_DIR=''
@@ -20,7 +22,7 @@ SPINNER_PID=''
 CURRENT_STEP=''
 STEP_RESULT=''
 STEP=0
-TOTAL_STEPS=9
+TOTAL_STEPS=11
 DOCKER_SERVICE_STATE=not-started
 POLICY_INSTALLED=0
 POLICY_BACKUP=''
@@ -40,11 +42,13 @@ Supports Debian-based Linux on amd64 and arm64. Needs root or sudo.
   --docker-group        Grant the user root-equivalent Docker group access.
   --no-start-docker     Suppress Docker/containerd starts, including APT hooks.
   --upgrade-docker      Upgrade official Docker packages (may restart Docker).
+  --no-neovim-config    Keep the existing Neovim config; skip rice/parser setup.
   --docker-codename NAME  Use a base Debian/Ubuntu codename for a derivative.
   --plain               Disable colors and the animated spinner.
   -h, --help            Show this help.
 
 Neovim and the other GitHub tools track the latest stable release on reruns.
+Neovim uses guneet-xyz/rice's default profile; existing configs are backed up.
 Docker uses Docker's official APT repository, never the distro's docker.io.
 Conflicting Docker packages and unmanaged /usr/local/bin files are protected.
 Set GITHUB_TOKEN for a higher GitHub API rate limit. NO_COLOR disables colors.
@@ -71,6 +75,7 @@ while (($#)); do
         --docker-group) DOCKER_GROUP=1 ;;
         --no-start-docker) START_DOCKER=0 ;;
         --upgrade-docker) UPGRADE_DOCKER=1 ;;
+        --no-neovim-config) CONFIGURE_NEOVIM=0 ;;
         --docker-codename)
             (($# >= 2)) && [[ -n $2 && $2 != -* ]] || die '--docker-codename requires a codename.'
             DOCKER_CODENAME=$2
@@ -123,12 +128,14 @@ case "$(dpkg --print-architecture)" in
         ARCH=amd64
         RUST_ARCH=x86_64
         NVIM_ARCH=x86_64
+        TREE_SITTER_ARCH=x64
         EZA_TARGET=x86_64-unknown-linux-musl
         ;;
     arm64)
         ARCH=arm64
         RUST_ARCH=aarch64
         NVIM_ARCH=arm64
+        TREE_SITTER_ARCH=arm64
         EZA_TARGET=aarch64-unknown-linux-gnu
         ;;
     *) die 'Only 64-bit amd64 and arm64 systems are supported.' ;;
@@ -145,8 +152,13 @@ printf '\n%sLinux Headless Setup%s\n' "$CYAN" "$RESET"
 printf '  System: %s (%s)\n  User:   %s (%s)\n\n' "${PRETTY_NAME:-Linux}" "$ARCH" "$TARGET_USER" "$TARGET_HOME"
 printf '  APT:    zsh, btop, and installation/runtime prerequisites\n'
 printf '  GitHub: latest stable Starship, zoxide, eza, and Neovim\n'
+if ((CONFIGURE_NEOVIM)); then
+    printf '  Neovim: rice default profile + build/parser tools; back up existing config\n'
+else
+    printf '  Neovim: binary only; existing config will not be changed\n'
+fi
 printf '  Docker: Docker\047s official APT repo (%s/%s), including Compose + Buildx\n' "$DOCKER_DISTRO" "$DOCKER_CODENAME"
-printf '  Shell:  preserve ~/.zshrc; add a managed integration block\n\n'
+printf '  Shell:  preserve ~/.zshrc; add integration and eza icons\n\n'
 ((! DOCKER_GROUP)) || printf '%sWarning:%s Docker group membership grants root-equivalent access.\n' "$YELLOW" "$RESET"
 ((! UPGRADE_DOCKER)) || printf '%sWarning:%s Upgrading Docker packages may restart the daemon/containers.\n' "$YELLOW" "$RESET"
 if ((! YES)); then
@@ -248,10 +260,25 @@ package_installed() {
     [[ $(dpkg-query -W -f='${Status}' "$1" 2>/dev/null) == 'install ok installed' ]]
 }
 
+as_user() {
+    # Do not inherit root's working directory or XDG paths when configuring a
+    # different account. Config files and Git operations run as their owner.
+    # The child shell, not this root process, expands HOME and its arguments.
+    # shellcheck disable=SC2016
+    runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" \
+        XDG_CONFIG_HOME="$TARGET_HOME/.config" XDG_DATA_HOME="$TARGET_HOME/.local/share" \
+        XDG_CACHE_HOME="$TARGET_HOME/.cache" XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+        sh -c 'cd "$HOME" && exec "$@"' linux-headless-setup "$@"
+}
+
 install_apt_packages() {
     local package
     local missing=()
-    for package in ca-certificates curl jq git tar xz-utils procps iptables util-linux passwd zsh btop; do
+    local packages=(ca-certificates curl jq git tar xz-utils procps iptables util-linux passwd zsh btop)
+    if ((CONFIGURE_NEOVIM)); then
+        packages+=(build-essential unzip ripgrep)
+    fi
+    for package in "${packages[@]}"; do
         package_installed "$package" || missing+=("$package")
     done
     if ((${#missing[@]} == 0)); then
@@ -294,7 +321,9 @@ managed_link() {
 
 install_github_tool() {
     local app=$1 command=$2 repo=$3 pattern=$4
+    local archive_type=${5:-tar}
     local metadata="$WORK_DIR/$app.json" fields tag asset url digest release binary stage extracted candidate
+    local built_locally=0
     local headers=(-H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
     [[ -z ${GITHUB_TOKEN:-} ]] || headers+=(-H "Authorization: Bearer $GITHUB_TOKEN")
     check_managed_link "$BIN_DIR/$command" "$APP_ROOT/$app"
@@ -321,7 +350,11 @@ install_github_tool() {
         download "$url" "$WORK_DIR/$asset"
         printf '%s  %s\n' "${digest#sha256:}" "$WORK_DIR/$asset" | sha256sum --check --status ||
             die "SHA-256 verification failed for $asset; the download was not installed."
-        tar --extract --gzip --file "$WORK_DIR/$asset" --directory "$extracted" --no-same-owner --no-same-permissions
+        if [[ $archive_type == gzip ]]; then
+            gzip --decompress --stdout "$WORK_DIR/$asset" >"$extracted/$command"
+        else
+            tar --extract --gzip --file "$WORK_DIR/$asset" --directory "$extracted" --no-same-owner --no-same-permissions
+        fi
         stage=$(mktemp -d "$APP_ROOT/$app/.install.XXXXXXXX")
         TEMP_PATHS+=("$stage")
         if [[ $app == neovim ]]; then
@@ -334,14 +367,29 @@ install_github_tool() {
             install -m 0755 "$candidate" "$stage/$command"
             candidate="$stage/$command"
         fi
-        "$candidate" --version
+        if [[ $app == tree-sitter ]]; then
+            if ! "$candidate" --version; then
+                build_treesitter_cli "$candidate" "$tag"
+                "$candidate" --version
+                built_locally=1
+            fi
+        else
+            "$candidate" --version
+        fi
         printf '%s\n%s\n' "$url" "$digest" >"$stage/.source"
+        if ((built_locally)); then
+            printf 'Built locally from tree-sitter-cli %s using Cargo --locked.\n' "${tag#v}" >>"$stage/.source"
+        fi
         # mktemp directories start at 0700; these system-wide binaries must be
         # traversable by the configured user, not only by root.
         chmod 0755 "$stage"
         mv -T -- "$stage" "$release"
         managed_link "$binary" "$BIN_DIR/$command" "$APP_ROOT/$app"
-        result "$tag installed (SHA-256 verified)"
+        if ((built_locally)); then
+            result "$tag built for local system libraries (Cargo checksums verified)"
+        else
+            result "$tag installed (SHA-256 verified)"
+        fi
     else
         [[ -x $binary && -f $release/.source ]] || die "Incomplete release directory: $release. Move it aside and rerun."
         if [[ $(stat -c %a "$release") != 755 ]]; then
@@ -486,6 +534,90 @@ configure_docker_service() {
     fi
 }
 
+build_treesitter_cli() {
+    local destination=$1 tag=$2 directory build checksum
+    local cache="$TARGET_HOME/.cache/linux-headless-setup"
+    local bootstrap="https://static.rust-lang.org/rustup/dist/$RUST_ARCH-unknown-linux-gnu/rustup-init"
+    printf 'Official Tree-sitter binary is incompatible; building for this host as %s.\n' "$TARGET_USER"
+    for directory in "$TARGET_HOME/.cache" "$cache"; do
+        [[ -d $directory ]] || install -d -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "$directory"
+    done
+    build=$(as_user mktemp -d "$cache/.tree-sitter-build.XXXXXXXX")
+    TEMP_PATHS+=("$build")
+    # Keep Rust entirely inside this temporary directory: no changes to the
+    # user's existing toolchains, shell profiles, or ~/.cargo configuration.
+    download "$bootstrap" "$WORK_DIR/rustup-init"
+    download "$bootstrap.sha256" "$WORK_DIR/rustup-init.sha256"
+    checksum=$(awk 'NR == 1 { print $1 }' "$WORK_DIR/rustup-init.sha256")
+    [[ $checksum =~ ^[a-fA-F0-9]{64}$ ]] || die 'Invalid official Rust bootstrap checksum.'
+    printf '%s  %s\n' "$checksum" "$WORK_DIR/rustup-init" | sha256sum --check --status ||
+        die 'Rust bootstrap SHA-256 verification failed.'
+    install -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "$WORK_DIR/rustup-init" "$build/rustup-init"
+    as_user env -u GITHUB_TOKEN CARGO_HOME="$build/cargo" RUSTUP_HOME="$build/rustup" \
+        RUSTUP_INIT_SKIP_PATH_CHECK=yes "$build/rustup-init" -y --profile minimal \
+        --no-modify-path --default-toolchain stable
+    as_user env -u GITHUB_TOKEN CARGO_HOME="$build/cargo" RUSTUP_HOME="$build/rustup" \
+        PATH="$build/cargo/bin:$PATH" RUSTUP_TOOLCHAIN=stable \
+        CARGO_BUILD_JOBS=2 CARGO_TERM_COLOR=never "$build/cargo/bin/cargo" install \
+        tree-sitter-cli --version "${tag#v}" --locked --no-default-features --root "$build/install"
+    install -m 0755 "$build/install/bin/tree-sitter" "$destination"
+}
+
+install_treesitter_cli() {
+    if ((! CONFIGURE_NEOVIM)); then
+        result 'Skipped; Neovim configuration disabled'
+        return
+    fi
+    install_github_tool tree-sitter tree-sitter tree-sitter/tree-sitter \
+        "^tree-sitter-linux-$TREE_SITTER_ARCH\\.gz$" gzip
+}
+
+configure_neovim() {
+    if ((! CONFIGURE_NEOVIM)); then
+        result 'Skipped; existing Neovim configuration left untouched'
+        return
+    fi
+    local cache="$TARGET_HOME/.local/share/linux-headless-setup"
+    local checkout="$TARGET_HOME/.local/share/linux-headless-setup/rice"
+    local config="$TARGET_HOME/.config/nvim" source directory stage backup origin revision
+    for directory in "$TARGET_HOME/.local" "$TARGET_HOME/.local/share" "$cache" "$TARGET_HOME/.config"; do
+        [[ -d $directory ]] || install -d -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "$directory"
+    done
+    if [[ -e $checkout || -L $checkout ]]; then
+        [[ -e $checkout/.git && ! -L $checkout ]] || die "Refusing to replace unmanaged path: $checkout"
+        origin=$(as_user git -C "$checkout" remote get-url origin)
+        [[ $origin == "$RICE_REPO" ]] || die "Unexpected repository at $checkout: $origin"
+        printf 'Reusing rice checkout without fetching or overwriting local edits.\n'
+    else
+        stage=$(as_user mktemp -d "$cache/.rice.XXXXXXXX")
+        TEMP_PATHS+=("$stage")
+        as_user env GIT_TERMINAL_PROMPT=0 git clone --depth 1 --filter=blob:none --sparse "$RICE_REPO" "$stage"
+        as_user git -C "$stage" sparse-checkout set nvim
+        [[ -f $stage/nvim/.config/nvim/init.lua && -d $stage/nvim/.config/nvim/lua ]] ||
+            die 'The rice default Neovim profile was not found at nvim/.config/nvim.'
+        mv -T -- "$stage" "$checkout"
+    fi
+    source="$checkout/nvim/.config/nvim"
+    [[ -f $source/init.lua && -d $source/lua ]] || die "Incomplete Neovim profile: $source"
+    # Compile (do not execute) every Lua file before replacing the current config.
+    # Plugin/Mason bootstrap is left to the user's first normal Neovim launch.
+    as_user env NVIM_APPNAME=nvim NVIM_CONFIG_DIR="$source" "$BIN_DIR/nvim" --headless -u NONE -i NONE \
+        "+lua for _, file in ipairs(vim.fn.globpath(vim.env.NVIM_CONFIG_DIR, '**/*.lua', false, true)) do local chunk, err = loadfile(file); if not chunk then vim.api.nvim_err_writeln(err); vim.cmd('cquit 1') end end" \
+        '+quit'
+    as_user test -w "$TARGET_HOME/.config" || die "$TARGET_USER cannot write to $TARGET_HOME/.config. Fix its permissions first."
+    if [[ ! -L $config || $(readlink -- "$config") != "$source" ]]; then
+        if [[ -e $config || -L $config ]]; then
+            backup=$(as_user mktemp -d "$TARGET_HOME/.config/nvim.bak.XXXXXXXX")
+            rmdir -- "$backup"
+            mv -T -- "$config" "$backup"
+            printf 'Backed up existing Neovim configuration to %s\n' "$backup"
+        fi
+        as_user ln -s -- "$source" "$config"
+    fi
+    revision=$(as_user git -C "$checkout" rev-parse --short HEAD)
+    result "rice default profile linked ($revision); plugins bootstrap on first launch"
+}
+
 configure_shell() {
     local config_dir="$TARGET_HOME/.config/linux-headless-setup" zshrc="$TARGET_HOME/.zshrc"
     local start='# >>> linux-headless-setup >>>' end='# <<< linux-headless-setup <<<' backup directory
@@ -508,10 +640,10 @@ autoload -Uz compinit
 (( $+functions[compdef] )) || compinit
 
 if (( $+commands[eza] )); then
-    (( $+aliases[ls] )) || alias ls='eza --group-directories-first'
-    (( $+aliases[ll] )) || alias ll='eza -lh --group-directories-first'
-    (( $+aliases[la] )) || alias la='eza -lah --group-directories-first'
-    (( $+aliases[lt] )) || alias lt='eza --tree --level=2'
+    (( $+aliases[ls] )) || alias ls='eza --icons=auto --group-directories-first'
+    (( $+aliases[ll] )) || alias ll='eza -lh --icons=auto --group-directories-first'
+    (( $+aliases[la] )) || alias la='eza -lah --icons=auto --group-directories-first'
+    (( $+aliases[lt] )) || alias lt='eza --tree --level=2 --icons=auto'
 fi
 if (( $+commands[zoxide] )); then
     eval "$(zoxide init zsh)"
@@ -571,8 +703,8 @@ EOF
             install -m 0644 -o "$TARGET_UID" -g "$TARGET_GID" "$WORK_DIR/zshrc" "$zshrc"
         fi
     fi
-    runuser -u "$TARGET_USER" -- zsh -fn "$config_dir/zshrc"
-    runuser -u "$TARGET_USER" -- zsh -fn "$zshrc"
+    as_user zsh -fn "$config_dir/zshrc"
+    as_user zsh -fn "$zshrc"
     if ((CHANGE_SHELL)); then
         local zsh_bin
         zsh_bin=$(command -v zsh)
@@ -593,12 +725,16 @@ verify_tools() {
     for command in zsh starship zoxide eza btop nvim docker; do
         executable=$(command -v "$command")
         printf '%s\n' "$executable"
-        runuser -u "$TARGET_USER" -- "$executable" --version
+        as_user "$executable" --version
     done
-    runuser -u "$TARGET_USER" -- /usr/bin/docker compose version
-    runuser -u "$TARGET_USER" -- /usr/bin/docker buildx version
+    as_user /usr/bin/docker compose version
+    as_user /usr/bin/docker buildx version
+    if ((CONFIGURE_NEOVIM)); then
+        as_user tree-sitter --version
+        as_user test -r "$TARGET_HOME/.config/nvim/init.lua"
+    fi
     # No plugins, user init, or ShaDa writes during the smoke check.
-    runuser -u "$TARGET_USER" -- "$BIN_DIR/nvim" --headless -u NONE -i NONE '+quit'
+    as_user "$BIN_DIR/nvim" --headless -u NONE -i NONE '+quit'
     result 'All seven tools verified; Neovim headless startup passed'
 }
 
@@ -609,6 +745,8 @@ run_step 'Install Starship' install_github_tool starship starship starship/stars
 run_step 'Install zoxide' install_github_tool zoxide zoxide ajeetdsouza/zoxide "^zoxide-[0-9.]+-$RUST_ARCH-unknown-linux-musl\\.tar\\.gz$"
 run_step 'Install eza' install_github_tool eza eza eza-community/eza "^eza_$EZA_TARGET\\.tar\\.gz$"
 run_step 'Install latest stable Neovim' install_github_tool neovim nvim neovim/neovim "^nvim-linux-$NVIM_ARCH\\.tar\\.gz$"
+run_step 'Install Tree-sitter CLI for Neovim' install_treesitter_cli
+run_step 'Configure Neovim from rice' configure_neovim
 run_step 'Install Docker from its official APT repository' install_docker
 run_step 'Configure Docker service' configure_docker_service
 run_step 'Configure user shell and permissions' configure_shell
@@ -630,6 +768,7 @@ case "$DOCKER_SERVICE_STATE" in
         printf 'Without systemd, start Docker using your init system or a supervisor.\n'
         ;;
 esac
+printf 'For eza/Neovim icons, select a Nerd Font in your local terminal (including SSH clients).\n'
 if [[ -n ${BASH_SOURCE[0]:-} ]]; then
     printf 'Update Docker later through APT, or run: sudo bash %q --user %q --yes --upgrade-docker\n' \
         "$(readlink -f -- "${BASH_SOURCE[0]}")" "$TARGET_USER"
