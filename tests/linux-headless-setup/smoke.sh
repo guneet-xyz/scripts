@@ -60,8 +60,12 @@ diff -u /root/policy-before.snapshot /root/policy-after.snapshot || fail 'Existi
 
 snapshot() {
     find /opt/linux-headless-setup /usr/local/bin "$HOME_DIR" /etc/systemd/system /etc/apt/keyrings /etc/apt/sources.list.d \
+        \( -path "$HOME_DIR/.cache" -o -path "$HOME_DIR/.npm" -o -path "$HOME_DIR/.local/state" -o -path "$HOME_DIR/.config/go/telemetry" \
+        -o -path "$HOME_DIR/.local/share/nvim/mason/packages/lua-language-server/libexec/log" \) -prune -o \
         -type f ! -name '.zcompdump*' -print0 | sort -z | xargs -0 sha256sum
     find /opt/linux-headless-setup /usr/local/bin "$HOME_DIR" /etc/systemd/system /etc/apt/keyrings /etc/apt/sources.list.d \
+        \( -path "$HOME_DIR/.cache" -o -path "$HOME_DIR/.npm" -o -path "$HOME_DIR/.local/state" -o -path "$HOME_DIR/.config/go/telemetry" \
+        -o -path "$HOME_DIR/.local/share/nvim/mason/packages/lua-language-server/libexec/log" \) -prune -o \
         -printf '%p %y %l %u %g %m %T@\n' | sort
     getent passwd "$USER_NAME"
     getent group docker
@@ -110,10 +114,25 @@ runuser -u "$USER_NAME" -- nvim --headless -u NONE -i NONE '+quit'
 runuser -u "$USER_NAME" -- env RICE_OPTIONS="$HOME_DIR/.config/nvim/lua/custom/options.lua" \
     nvim --headless -u NONE -i NONE \
     "+lua dofile(vim.env.RICE_OPTIONS); if vim.g.mapleader ~= ',' or vim.g.have_nerd_font ~= true then vim.cmd('cquit 1') end" '+quit'
-for dependency in cc make unzip rg tree-sitter; do
+for dependency in cc make unzip rg tree-sitter node npm npx python3 go gofmt helm; do
     # shellcheck disable=SC2016
     runuser -u "$USER_NAME" -- sh -c 'command -v "$1"' test "$dependency" >/dev/null || fail "Missing Neovim dependency: $dependency"
 done
+NODE_PREFIX="$HOME_DIR/.local/share/linux-headless-setup/npm"
+MASON_BIN="$HOME_DIR/.local/share/nvim/mason/bin"
+runuser -u "$USER_NAME" -- env PATH="$MASON_BIN:$HOME_DIR/.local/bin:$PATH" NPM_CONFIG_PREFIX="$NODE_PREFIX" \
+    npx --offline --no-install prettier --version
+runuser -u "$USER_NAME" -- python3 -c 'import venv, ensurepip'
+runuser -u "$USER_NAME" -- node -e 'if (Number(process.versions.node.split(".")[0]) < 24) process.exit(1)'
+for dependency in lua-language-server pylsp vscode-json-language-server typescript-language-server \
+    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat helm_ls yaml-language-server; do
+    [[ -x $MASON_BIN/$dependency ]] || fail "Missing configured Neovim tool: $dependency"
+done
+[[ $(stat -c %U "$NODE_PREFIX/lib/node_modules/prettier") == "$USER_NAME" ]] || fail 'Prettier was installed as root.'
+[[ $(stat -c %U "$HOME_DIR/.local/share/nvim/mason") == "$USER_NAME" ]] || fail 'Mason tools were installed as root.'
+# Load the installed native parser modules with plugins/config disabled.
+runuser -u "$USER_NAME" -- nvim --headless -u NONE -i NONE \
+    "+lua for _, lang in ipairs({'typescript','tsx','javascript','yaml','helm','python','go'}) do if not pcall(vim.treesitter.language.add, lang) then vim.cmd('cquit 1') end end" '+quit'
 
 for tool in zsh starship zoxide eza btop nvim docker dockerd; do
     "$tool" --version
@@ -150,7 +169,7 @@ mv /etc/apt/sources.list.d/existing-docker.sources /etc/apt/sources.list.d/docke
 useradd --create-home --shell /bin/bash headless-other
 # A pseudo-terminal also exercises the color/spinner path without noisy test output.
 if ! script --quiet --return --command \
-    "env -u NO_COLOR TERM=xterm bash '$SETUP' --yes --user headless-other --no-change-shell" \
+    "env -u NO_COLOR TERM=xterm bash '$SETUP' --yes --user headless-other --no-change-shell --no-neovim-config" \
     /root/tty.log >/root/tty-output.log; then
     cat /root/tty-output.log
     fail 'Terminal UI run failed.'

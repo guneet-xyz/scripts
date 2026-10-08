@@ -19,7 +19,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 docker info >/dev/null
-CONTAINER=$(docker create "$IMAGE" sleep infinity)
+CONTAINER=$(docker create --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=2g \
+    --tmpfs /home:rw,exec,nosuid,nodev,mode=0755,size=2g "$IMAGE" sleep infinity)
 docker cp "$REPO_ROOT/linux-headless-setup/." "$CONTAINER:/opt/headless-setup"
 docker cp "$SCRIPT_DIR/." "$CONTAINER:/opt/headless-setup-tests"
 docker start "$CONTAINER" >/dev/null

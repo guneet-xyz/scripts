@@ -22,12 +22,18 @@ SPINNER_PID=''
 CURRENT_STEP=''
 STEP_RESULT=''
 STEP=0
-TOTAL_STEPS=11
+TOTAL_STEPS=15
 DOCKER_SERVICE_STATE=not-started
 POLICY_INSTALLED=0
 POLICY_BACKUP=''
 TEMP_PATHS=()
 ORIGINAL_ARGS=("$@")
+NVIM_MASON_PACKAGES=(lua-language-server python-lsp-server json-lsp typescript-language-server
+    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat helm-ls yaml-language-server)
+NVIM_MASON_COMMANDS=(lua-language-server pylsp vscode-json-language-server typescript-language-server
+    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat helm_ls yaml-language-server)
+NVIM_PARSERS=(bash c diff html lua luadoc markdown markdown_inline query vim vimdoc
+    typescript tsx javascript yaml helm python go json cpp java astro)
 
 usage() {
     cat <<'EOF'
@@ -42,7 +48,7 @@ Supports Debian-based Linux on amd64 and arm64. Needs root or sudo.
   --docker-group        Grant the user root-equivalent Docker group access.
   --no-start-docker     Suppress Docker/containerd starts, including APT hooks.
   --upgrade-docker      Upgrade official Docker packages (may restart Docker).
-  --no-neovim-config    Keep the existing Neovim config; skip rice/parser setup.
+  --no-neovim-config    Keep Neovim config; skip rice and editor dependency setup.
   --docker-codename NAME  Use a base Debian/Ubuntu codename for a derivative.
   --plain               Disable colors and the animated spinner.
   -h, --help            Show this help.
@@ -153,7 +159,8 @@ printf '  System: %s (%s)\n  User:   %s (%s)\n\n' "${PRETTY_NAME:-Linux}" "$ARCH
 printf '  APT:    zsh, btop, and installation/runtime prerequisites\n'
 printf '  GitHub: latest stable Starship, zoxide, eza, and Neovim\n'
 if ((CONFIGURE_NEOVIM)); then
-    printf '  Neovim: rice default profile + build/parser tools; back up existing config\n'
+    printf '  Neovim: rice profile, Node LTS, Go, Python, formatters, and parsers\n'
+    printf '          back up existing config; bootstrap tools as the target user\n'
 else
     printf '  Neovim: binary only; existing config will not be changed\n'
 fi
@@ -268,6 +275,8 @@ as_user() {
     runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" \
         XDG_CONFIG_HOME="$TARGET_HOME/.config" XDG_DATA_HOME="$TARGET_HOME/.local/share" \
         XDG_CACHE_HOME="$TARGET_HOME/.cache" XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+        PATH="$BIN_DIR:$TARGET_HOME/.local/bin:$TARGET_HOME/.local/share/nvim/mason/bin:$PATH" \
+        NPM_CONFIG_PREFIX="$TARGET_HOME/.local/share/linux-headless-setup/npm" \
         sh -c 'cd "$HOME" && exec "$@"' linux-headless-setup "$@"
 }
 
@@ -276,7 +285,7 @@ install_apt_packages() {
     local missing=()
     local packages=(ca-certificates curl jq git tar xz-utils procps iptables util-linux passwd zsh btop)
     if ((CONFIGURE_NEOVIM)); then
-        packages+=(build-essential unzip ripgrep)
+        packages+=(build-essential unzip ripgrep python3 python3-venv python3-pip xclip wl-clipboard)
     fi
     for package in "${packages[@]}"; do
         package_installed "$package" || missing+=("$package")
@@ -385,6 +394,8 @@ install_github_tool() {
         chmod 0755 "$stage"
         mv -T -- "$stage" "$release"
         managed_link "$binary" "$BIN_DIR/$command" "$APP_ROOT/$app"
+        rm -rf -- "$extracted"
+        rm -- "$WORK_DIR/$asset"
         if ((built_locally)); then
             result "$tag built for local system libraries (Cargo checksums verified)"
         else
@@ -399,6 +410,127 @@ install_github_tool() {
         managed_link "$binary" "$BIN_DIR/$command" "$APP_ROOT/$app"
         result "Already current ($tag)"
     fi
+}
+
+install_verified_runtime() {
+    local app=$1 version=$2 asset=$3 url=$4 checksum=$5 archive_root=$6
+    local release="$APP_ROOT/$app/$version-$ARCH" extracted stage name
+    local commands=()
+    [[ $version =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && $checksum =~ ^[a-fA-F0-9]{64}$ ]] ||
+        die "Invalid official $app release metadata."
+    case "$app" in
+        nodejs) commands=(node npm npx) ;;
+        go) commands=(go gofmt) ;;
+        helm) commands=(helm) ;;
+        *) die "Unknown runtime: $app" ;;
+    esac
+    for name in "${commands[@]}"; do
+        check_managed_link "$BIN_DIR/$name" "$APP_ROOT/$app"
+    done
+    if [[ ! -d $release ]]; then
+        mkdir -p "$APP_ROOT/$app" "$BIN_DIR"
+        extracted="$WORK_DIR/$app-runtime"
+        mkdir -p "$extracted"
+        download "$url" "$WORK_DIR/$asset"
+        printf '%s  %s\n' "$checksum" "$WORK_DIR/$asset" | sha256sum --check --status ||
+            die "$app archive checksum verification failed."
+        tar --extract --file "$WORK_DIR/$asset" --directory "$extracted" --no-same-owner --no-same-permissions
+        stage=$(mktemp -d "$APP_ROOT/$app/.install.XXXXXXXX")
+        TEMP_PATHS+=("$stage")
+        if [[ $app == helm ]]; then
+            [[ -f $extracted/$archive_root/helm ]] || die 'Unexpected Helm archive layout.'
+            mkdir "$stage/bin"
+            install -m 0755 "$extracted/$archive_root/helm" "$stage/bin/helm"
+        else
+            [[ -d $extracted/$archive_root/bin ]] || die "Unexpected $app archive layout."
+            cp -a "$extracted/$archive_root/." "$stage/"
+        fi
+        if [[ $app == nodejs ]]; then
+            "$stage/bin/node" --version
+        elif [[ $app == helm ]]; then
+            "$stage/bin/helm" version --short
+        else
+            "$stage/bin/go" version
+        fi
+        printf '%s\n%s\n' "$url" "$checksum" >"$stage/.source"
+        chmod 0755 "$stage"
+        mv -T -- "$stage" "$release"
+        rm -rf -- "$extracted"
+        rm -- "$WORK_DIR/$asset"
+    fi
+    [[ -f $release/.source ]] || die "Incomplete runtime directory: $release"
+    for name in "${commands[@]}"; do
+        [[ -x $release/bin/$name ]] || die "Missing runtime executable: $release/bin/$name"
+        managed_link "$release/bin/$name" "$BIN_DIR/$name" "$APP_ROOT/$app"
+    done
+    if [[ $app == nodejs ]]; then
+        as_user node --version
+        as_user npm --version
+        as_user npx --version
+    elif [[ $app == helm ]]; then
+        as_user helm version --short
+    else
+        as_user go version
+    fi
+    result "$version ready (official archive; SHA-256 verified)"
+}
+
+install_nodejs() {
+    if ((! CONFIGURE_NEOVIM)); then
+        result 'Skipped; Neovim configuration disabled'
+        return
+    fi
+    local version asset checksum
+    download https://nodejs.org/dist/index.json "$WORK_DIR/node-index.json"
+    version=$(jq -er --arg platform "linux-$TREE_SITTER_ARCH" '
+        [.[] | select(.lts | type == "string") | select(.files | index($platform))][0].version
+    ' "$WORK_DIR/node-index.json")
+    [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Invalid Node LTS version.'
+    asset="node-$version-linux-$TREE_SITTER_ARCH.tar.xz"
+    download "https://nodejs.org/dist/$version/SHASUMS256.txt" "$WORK_DIR/node-checksums.txt"
+    checksum=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$WORK_DIR/node-checksums.txt")
+    install_verified_runtime nodejs "$version" "$asset" "https://nodejs.org/dist/$version/$asset" \
+        "$checksum" "node-$version-linux-$TREE_SITTER_ARCH"
+}
+
+install_helm() {
+    if ((! CONFIGURE_NEOVIM)); then
+        result 'Skipped; Neovim configuration disabled'
+        return
+    fi
+    local version asset checksum
+    local headers=(-H 'Accept: application/vnd.github+json')
+    [[ -z ${GITHUB_TOKEN:-} ]] || headers+=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 --max-time 60 \
+        --proto '=https' --proto-redir '=https' "${headers[@]}" \
+        'https://api.github.com/repos/helm/helm/releases?per_page=100' --output "$WORK_DIR/helm-releases.json"
+    # Keep the compatible Helm 3 line for the current helm-ls profile.
+    version=$(jq -er '[.[] | select(.draft == false and .prerelease == false) |
+        select(.tag_name | test("^v3\\.[0-9]+\\.[0-9]+$"))][0].tag_name' "$WORK_DIR/helm-releases.json")
+    [[ $version =~ ^v3\.[0-9]+\.[0-9]+$ ]] || die 'Invalid official Helm 3 release metadata.'
+    asset="helm-$version-linux-$ARCH.tar.gz"
+    download "https://get.helm.sh/$asset.sha256sum" "$WORK_DIR/helm.sha256sum"
+    checksum=$(awk 'NR == 1 { print $1 }' "$WORK_DIR/helm.sha256sum")
+    install_verified_runtime helm "$version" "$asset" "https://get.helm.sh/$asset" "$checksum" "linux-$ARCH"
+}
+
+install_go() {
+    if ((! CONFIGURE_NEOVIM)); then
+        result 'Skipped; Neovim configuration disabled'
+        return
+    fi
+    local fields version asset checksum
+    download 'https://go.dev/dl/?mode=json' "$WORK_DIR/go-index.json"
+    fields=$(jq -er --arg arch "$ARCH" '
+        [.[] | select(.stable == true)][0] |
+        .version as $version | .files[] |
+        select(.os == "linux" and .arch == $arch and .kind == "archive") |
+        [$version, .filename, .sha256] | @tsv
+    ' "$WORK_DIR/go-index.json")
+    IFS=$'\t' read -r version asset checksum <<<"$fields"
+    [[ $version =~ ^go[0-9]+\.[0-9]+(\.[0-9]+)?$ && $asset == "$version.linux-$ARCH.tar.gz" ]] ||
+        die 'Invalid official Go release metadata.'
+    install_verified_runtime go "$version" "$asset" "https://go.dev/dl/$asset" "$checksum" go
 }
 
 check_docker_conflicts() {
@@ -535,14 +667,10 @@ configure_docker_service() {
 }
 
 build_treesitter_cli() {
-    local destination=$1 tag=$2 directory build checksum
-    local cache="$TARGET_HOME/.cache/linux-headless-setup"
+    local destination=$1 tag=$2 build checksum
     local bootstrap="https://static.rust-lang.org/rustup/dist/$RUST_ARCH-unknown-linux-gnu/rustup-init"
     printf 'Official Tree-sitter binary is incompatible; building for this host as %s.\n' "$TARGET_USER"
-    for directory in "$TARGET_HOME/.cache" "$cache"; do
-        [[ -d $directory ]] || install -d -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "$directory"
-    done
-    build=$(as_user mktemp -d "$cache/.tree-sitter-build.XXXXXXXX")
+    build=$(as_user mktemp -d -t linux-headless-setup-tree-sitter.XXXXXXXX)
     TEMP_PATHS+=("$build")
     # Keep Rust entirely inside this temporary directory: no changes to the
     # user's existing toolchains, shell profiles, or ~/.cargo configuration.
@@ -561,6 +689,8 @@ build_treesitter_cli() {
         CARGO_BUILD_JOBS=2 CARGO_TERM_COLOR=never "$build/cargo/bin/cargo" install \
         tree-sitter-cli --version "${tag#v}" --locked --no-default-features --root "$build/install"
     install -m 0755 "$build/install/bin/tree-sitter" "$destination"
+    # The compiler and build cache are no longer needed once the CLI is copied.
+    rm -rf -- "$build"
 }
 
 install_treesitter_cli() {
@@ -600,7 +730,6 @@ configure_neovim() {
     source="$checkout/nvim/.config/nvim"
     [[ -f $source/init.lua && -d $source/lua ]] || die "Incomplete Neovim profile: $source"
     # Compile (do not execute) every Lua file before replacing the current config.
-    # Plugin/Mason bootstrap is left to the user's first normal Neovim launch.
     as_user env NVIM_APPNAME=nvim NVIM_CONFIG_DIR="$source" "$BIN_DIR/nvim" --headless -u NONE -i NONE \
         "+lua for _, file in ipairs(vim.fn.globpath(vim.env.NVIM_CONFIG_DIR, '**/*.lua', false, true)) do local chunk, err = loadfile(file); if not chunk then vim.api.nvim_err_writeln(err); vim.cmd('cquit 1') end end" \
         '+quit'
@@ -615,7 +744,120 @@ configure_neovim() {
         as_user ln -s -- "$source" "$config"
     fi
     revision=$(as_user git -C "$checkout" rev-parse --short HEAD)
-    result "rice default profile linked ($revision); plugins bootstrap on first launch"
+    result "rice default profile linked ($revision)"
+}
+
+install_neovim_dependencies() {
+    if ((! CONFIGURE_NEOVIM)); then
+        result 'Skipped; Neovim configuration disabled'
+        return
+    fi
+    local cache="$TARGET_HOME/.cache/linux-headless-setup"
+    local prefix="$TARGET_HOME/.local/share/linux-headless-setup/npm"
+    local marker="$TARGET_HOME/.local/share/linux-headless-setup/neovim-tools-v1"
+    local directory script command parser package_list parser_list ready=1
+    for directory in "$TARGET_HOME/.cache" "$cache" "$TARGET_HOME/.local/bin"; do
+        [[ -d $directory ]] || install -d -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "$directory"
+    done
+    if [[ -e $prefix ]]; then
+        [[ -f $prefix/.linux-headless-setup ]] || die "Refusing to replace unmanaged npm prefix: $prefix"
+    else
+        as_user mkdir -- "$prefix"
+        as_user touch "$prefix/.linux-headless-setup"
+    fi
+    if [[ ! -f $prefix/lib/node_modules/prettier/package.json ]]; then
+        # The config invokes npx, so keep Prettier in an explicit user-owned
+        # global prefix, not in root's npm directory or a project working tree.
+        as_user npm install --global --ignore-scripts --no-audit --no-fund prettier
+    fi
+    managed_link "$prefix/bin/prettier" "$TARGET_HOME/.local/bin/prettier" "$prefix"
+    chown -h "$TARGET_UID:$TARGET_GID" "$TARGET_HOME/.local/bin/prettier"
+    [[ -f $marker ]] || ready=0
+    for command in "${NVIM_MASON_COMMANDS[@]}"; do
+        [[ -x $TARGET_HOME/.local/share/nvim/mason/bin/$command ]] || ready=0
+    done
+    for parser in "${NVIM_PARSERS[@]}"; do
+        [[ -f $TARGET_HOME/.local/share/nvim/site/parser/$parser.so ]] || ready=0
+    done
+    if ((ready)); then
+        verify_neovim_dependencies
+        result 'Runtimes, formatters, language tools, and parsers already ready; no plugin sync'
+        return
+    fi
+    script=$(as_user mktemp "$cache/.neovim-tools.XXXXXXXX")
+    TEMP_PATHS+=("$script")
+    cat >"$script" <<'EOF'
+local ok, err = pcall(function()
+  -- Install missing plugins only; do not clean or update a user's plugin set.
+  require('lazy').install({ wait = true, show = false })
+  local registry = require('mason-registry')
+  registry.refresh()
+  local packages = {}
+  for name in vim.env.NVIM_TOOL_PACKAGES:gmatch('[^,]+') do
+    local package = registry.get_package(name)
+    packages[#packages + 1] = package
+    if not package:is_installed() and not package:is_installing() then
+      package:install()
+    end
+  end
+  assert(vim.wait(600000, function()
+    for _, package in ipairs(packages) do
+      if package:is_installing() then return false end
+    end
+    return true
+  end, 200), 'Timed out installing Mason tools')
+  for _, package in ipairs(packages) do
+    assert(package:is_installed(), 'Mason failed to install ' .. package.name)
+  end
+  local parsers = vim.split(vim.env.NVIM_TOOL_PARSERS, ',', { trimempty = true })
+  require('nvim-treesitter').install(parsers):wait(600000)
+  assert(vim.wait(600000, function()
+    for _, parser in ipairs(parsers) do
+      if not pcall(vim.treesitter.language.add, parser) then return false end
+    end
+    return true
+  end, 200), 'One or more Tree-sitter parsers failed to install/load')
+end)
+if not ok then
+  vim.api.nvim_err_writeln(tostring(err))
+  vim.cmd('cquit 1')
+end
+vim.cmd('qa!')
+EOF
+    printf -v package_list '%s,' "${NVIM_MASON_PACKAGES[@]}"
+    printf -v parser_list '%s,' "${NVIM_PARSERS[@]}"
+    as_user env NVIM_APPNAME=nvim NVIM_TOOL_BOOTSTRAP="$script" \
+        NVIM_TOOL_PACKAGES="${package_list%,}" NVIM_TOOL_PARSERS="${parser_list%,}" \
+        nvim --headless -i NONE '+lua dofile(vim.env.NVIM_TOOL_BOOTSTRAP)'
+    verify_neovim_dependencies
+    as_user touch "$marker"
+    result 'Configured language servers, formatters, and parsers installed/checked as the target user'
+}
+
+verify_neovim_dependencies() {
+    local command
+    for command in node npm npx python3 go gofmt helm rg cc make unzip tree-sitter prettier "${NVIM_MASON_COMMANDS[@]}"; do
+        # shellcheck disable=SC2016
+        as_user sh -c 'command -v "$1"' dependency "$command"
+    done
+    as_user node --version
+    as_user npm --version
+    as_user python3 --version
+    as_user python3 -c 'import venv, ensurepip'
+    as_user go version
+    as_user helm version --short
+    as_user npx --offline --no-install prettier --version
+    as_user stylua --version
+    as_user shfmt --version
+    as_user clang-format --version
+    as_user gofumpt --version
+    as_user yamlfmt --version
+    as_user isort --version-number
+    as_user ruff --version
+    as_user mdformat --version
+    as_user typescript-language-server --version
+    as_user pylsp --version
+    as_user lua-language-server --version --logpath="$TARGET_HOME/.cache/linux-headless-setup/lua-language-server"
 }
 
 configure_shell() {
@@ -629,6 +871,12 @@ configure_shell() {
 # Put personal customizations in ~/.zshrc, not this generated file.
 typeset -U path PATH
 path=(/usr/local/bin "$HOME/.local/bin" $path)
+if [[ -d "$HOME/.local/share/nvim/mason/bin" ]]; then
+    path+=("$HOME/.local/share/nvim/mason/bin")
+fi
+if [[ -d "$HOME/.local/share/linux-headless-setup/npm" ]]; then
+    export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.local/share/linux-headless-setup/npm}"
+fi
 export EDITOR="${EDITOR:-nvim}"
 export VISUAL="${VISUAL:-$EDITOR}"
 HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
@@ -732,6 +980,7 @@ verify_tools() {
     if ((CONFIGURE_NEOVIM)); then
         as_user tree-sitter --version
         as_user test -r "$TARGET_HOME/.config/nvim/init.lua"
+        verify_neovim_dependencies
     fi
     # No plugins, user init, or ShaDa writes during the smoke check.
     as_user "$BIN_DIR/nvim" --headless -u NONE -i NONE '+quit'
@@ -746,7 +995,11 @@ run_step 'Install zoxide' install_github_tool zoxide zoxide ajeetdsouza/zoxide "
 run_step 'Install eza' install_github_tool eza eza eza-community/eza "^eza_$EZA_TARGET\\.tar\\.gz$"
 run_step 'Install latest stable Neovim' install_github_tool neovim nvim neovim/neovim "^nvim-linux-$NVIM_ARCH\\.tar\\.gz$"
 run_step 'Install Tree-sitter CLI for Neovim' install_treesitter_cli
+run_step 'Install current Node.js LTS and npm' install_nodejs
+run_step 'Install Go runtime and gofmt' install_go
+run_step 'Install Helm CLI for the Helm plugin' install_helm
 run_step 'Configure Neovim from rice' configure_neovim
+run_step 'Install and verify Neovim dependency tools' install_neovim_dependencies
 run_step 'Install Docker from its official APT repository' install_docker
 run_step 'Configure Docker service' configure_docker_service
 run_step 'Configure user shell and permissions' configure_shell

@@ -16,6 +16,10 @@ From the repository root, with a working Docker daemon:
 The runner resolves paths relative to its own location, so it also works when
 invoked by an absolute path from another directory. If `GITHUB_TOKEN` is set,
 it is forwarded to the test container for GitHub release API requests.
+Temporary downloads/builds and test users' homes use size-limited tmpfs mounts
+to avoid filling the Docker host's disk. Run the tests with enough available
+RAM (up to 4 GiB of tmpfs space plus the running tools), especially when testing
+the older-system Tree-sitter source-build fallback.
 
 ## Coverage and isolation
 
@@ -29,9 +33,11 @@ colors/spinner, `NO_COLOR`, interactive cancellation, and installation through
 Bash stdin (as used by the documented curl-to-Bash command).
 Neovim checks cover the rice symlink and source layout, user ownership, private
 directory permissions, one-time backups, preservation of local edits, and
-`--no-neovim-config`. Eza aliases are checked for icon flags. Lua syntax and rice's
-core options are checked without downloading/executing its plugin stack; Lazy
-and Mason bootstrap on the user's first normal Neovim launch.
+`--no-neovim-config`. Eza aliases are checked for icon flags. The tests now execute
+rice's real plugin bootstrap and check its Node/npm/Python/Go runtimes, configured
+Mason tools, offline npx/Prettier resolution, and native Helm/MDX parser loading.
+Runtime logs/caches and Go telemetry are excluded from filesystem-idempotence
+snapshots; installed files, config content, ownership, and permissions are checked.
 
 Only the installer folder and this test folder are copied into the container;
 the repository's `.git` directory and other scripts are not copied. The Docker

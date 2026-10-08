@@ -51,7 +51,7 @@ It installs missing APT packages, not a full system upgrade.
 | `--docker-group` | Opt in to Docker access without sudo; **grants root-equivalent privileges**. |
 | `--no-start-docker` | Suppress Docker/containerd start/restart hooks during APT installation and skip explicit service startup. Useful in containers. Does not stop an already-running daemon. |
 | `--upgrade-docker` | Upgrade official Docker packages to the latest APT candidates. Package upgrades may restart Docker and interrupt containers. |
-| `--no-neovim-config` | Keep the existing Neovim configuration; skip the rice checkout and Tree-sitter CLI. |
+| `--no-neovim-config` | Keep the existing Neovim configuration; skip rice and its runtime/tool/parser setup. |
 | `--docker-codename NAME` | Override the repository suite with the corresponding Debian/Ubuntu base release for a derivative. |
 | `--plain` | No colors or spinner. `NO_COLOR=1` also disables colors. |
 | `--help`, `-h` | Show usage. |
@@ -75,7 +75,8 @@ sudo --preserve-env=GITHUB_TOKEN ./linux-headless-setup/setup.sh --yes --user "$
 | eza | Latest stable `eza-community/eza` GitHub release; musl on amd64, GNU on arm64. |
 | Neovim | Latest stable `neovim/neovim` GitHub release; full Linux tarball, **not APT or AppImage**. Includes its runtime and needs no FUSE. |
 | Neovim config | The `nvim/.config/nvim` folder from `guneet-xyz/rice`, linked into the target user's `~/.config/nvim`. No other rice packages are installed. |
-| Neovim dependencies | APT `build-essential`, `unzip`, and `ripgrep`, plus the latest official `tree-sitter/tree-sitter` CLI release for amd64/arm64 (SHA-256 verified). |
+| Neovim runtimes | Current Node.js **LTS** (including npm/npx), stable Go (including gofmt), and compatible Helm 3, from official archives with published SHA-256 checksums. Python 3, pip, and venv support come from APT. |
+| Neovim dependencies | APT build tools, unzip, ripgrep, X11/Wayland clipboard clients, plus the official Tree-sitter CLI. Lazy/Mason install and verify the enabled profile's plugins, language servers, formatters, and native parsers as the target user. |
 | Docker | **Docker's official APT repository**, following its [Debian](https://docs.docker.com/engine/install/debian/#install-using-the-repository) / [Ubuntu](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository) instructions. Installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin`. Never installs the distribution's `docker.io`. |
 
 GitHub assets are checked against their published SHA-256 API digests before
@@ -104,6 +105,11 @@ manage that tool.
   Reruns reuse the checkout without pulling, resetting, or overwriting local
   edits, and do not create duplicate backups. All Lua files are syntax-checked
   as the target user before linking the configuration.
+- The dependency bootstrap installs missing plugins/tools only, rather than
+  updating or cleaning an existing plugin set. A completion marker and executable/
+  parser checks let healthy reruns skip the bootstrap. npm helpers are kept in a
+  user-owned prefix; Python tools installed through Mason use virtual environments,
+  not `sudo pip` or system-Python overrides.
 - Docker's official repository and signing key are configured only as needed.
   Existing official repository definitions are reused to avoid duplicate entries.
   Already-installed official Docker packages are reused unless `--upgrade-docker`
@@ -149,13 +155,26 @@ removed on exit without changing shell profiles or existing Rust installations.
 This first-time fallback needs extra downloads, disk space, and several minutes;
 reruns reuse the installed CLI instead of rebuilding it.
 
-Open `nvim` as the target user after setup. The repository's Lazy/Mason bootstrap
-then downloads its plugins and language tools; the installer does not execute
-the plugin configuration as root or repeatedly sync plugins on reruns.
-Language-specific servers and formatters may require additional runtimes such
-as Node.js/npm, Python with virtual-environment support, or Go. Install the
-toolchains needed for the languages you use; they are not all installed globally
-by this script. Use `:Lazy`, `:Mason`, and `:checkhealth` to inspect their status.
+The installer now bootstraps and checks the profile's dependencies in headless
+Neovim **as the target account** (normally an unprivileged user; selecting root
+explicitly means the configuration runs as root). It supplies Node.js LTS,
+npm/npx, Go/gofmt, Python with pip/venv support, compiler/build tools, and ripgrep.
+It installs the selected language servers and formatters through Lazy/Mason,
+and extra native parsers needed by the Helm and MDX plugins. Prettier is installed
+in `~/.local/share/linux-headless-setup/npm` so the config's `npx prettier` command
+works without an interactive package-install prompt. The managed shell exports
+that npm prefix when no custom prefix is already set and exposes Mason's tools.
+
+See the [dependency audit](neovim-dependencies.md) for exact package names,
+tool-to-feature mapping, and intentionally excluded optional tools. First setup
+requires additional HTTPS access to npm, PyPI, Rust distribution endpoints,
+and Mason/Tree-sitter package sources. No configuration files in rice are patched.
+Use `:Lazy`, `:Mason`, and `:checkhealth` to inspect the resulting setup.
+
+`xclip` and `wl-clipboard` are installed for sessions with an X11/Wayland display;
+they do not create a display server or make a remote SSH clipboard available by
+themselves. In headless SSH sessions, clipboard integration depends on Neovim's
+OSC52 provider and support in your local terminal.
 
 To update the config, review your local changes and pull the user-owned checkout:
 
