@@ -16,7 +16,7 @@ lack btop or the libraries needed by the latest upstream binaries.
 Install directly without cloning the repository (requires `curl` and `sudo`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/guneet-xyz/scripts/main/linux-headless-setup/setup.sh \
+curl -fsSL https://raw.githubusercontent.com/guneet-xyz/scripts/refs/heads/main/linux-headless-setup/setup.sh \
   | sudo bash -s -- --yes
 ```
 
