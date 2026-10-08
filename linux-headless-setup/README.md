@@ -148,23 +148,7 @@ nvim --version
 sudo docker run --rm hello-world
 ```
 
-## Container smoke test
+## Tests
 
-From the repository root, with a working Docker daemon:
-
-```bash
-./linux-headless-setup/test-in-docker.sh
-# Optional alternative base image:
-./linux-headless-setup/test-in-docker.sh ubuntu:24.04
-```
-
-The test creates a disposable, **unprivileged** container, installs all tools,
-runs the installer twice, checks user ownership, initialization, versions,
-backups, file timestamps, Docker package origins, service-policy restoration, and
-Neovim headless startup, then removes only its own container. It also checks the
-opt-in Docker upgrade path with the same release.
-Additional checks cover official-repository reuse, opt-in group access, terminal
-colors/spinner, `NO_COLOR`, and interactive cancellation.
-The Docker host socket is not mounted. Docker binaries are tested, but service
-startup and nested containers are not: a normal test container has no systemd
-or privileges to run a Docker daemon. No host packages or dotfiles are modified.
+Container tests and their instructions live separately in
+[`tests/linux-headless-setup/`](../tests/linux-headless-setup/README.md).

@@ -8,6 +8,7 @@ if (($# > 1)) || [[ ${1:-} == -* ]]; then
 fi
 IMAGE=${1:-debian:bookworm-slim}
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 CONTAINER=''
 
 cleanup() {
@@ -19,9 +20,10 @@ trap 'exit 143' TERM
 
 docker info >/dev/null
 CONTAINER=$(docker create "$IMAGE" sleep infinity)
-docker cp "$SCRIPT_DIR/." "$CONTAINER:/opt/headless-setup"
+docker cp "$REPO_ROOT/linux-headless-setup/." "$CONTAINER:/opt/headless-setup"
+docker cp "$SCRIPT_DIR/." "$CONTAINER:/opt/headless-setup-tests"
 docker start "$CONTAINER" >/dev/null
 ENV_OPTIONS=()
 [[ -z ${GITHUB_TOKEN:-} ]] || ENV_OPTIONS+=(--env GITHUB_TOKEN)
-docker exec "${ENV_OPTIONS[@]}" "$CONTAINER" bash /opt/headless-setup/tests/smoke.sh
+docker exec "${ENV_OPTIONS[@]}" "$CONTAINER" bash /opt/headless-setup-tests/smoke.sh
 printf '\nContainer smoke test passed (%s).\n' "$IMAGE"

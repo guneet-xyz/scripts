@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs inside the disposable container, not on the host.
+# Executed inside a disposable container by test-in-docker.sh, not on the host.
 set -Eeuo pipefail
 
 SETUP=/opt/headless-setup/setup.sh
