@@ -35,8 +35,22 @@ if bash "$SETUP" --user >/dev/null 2>&1; then fail 'Missing --user argument was 
 if bash "$SETUP" --unknown >/dev/null 2>&1; then fail 'Unknown argument was accepted.'; fi
 if bash "$SETUP" --yes --user no-such-test-user >/dev/null 2>&1; then fail 'Missing account was accepted.'; fi
 
+# Piped execution cannot re-open its source file to elevate privileges.
+if cat "$SETUP" | runuser -u "$USER_NAME" -- bash -s -- --yes >/root/unprivileged-pipe.log 2>&1; then
+    fail 'Piped execution was accepted without root privileges.'
+fi
+grep -Fq 'When piping the script, run it as root' /root/unprivileged-pipe.log ||
+    fail 'Piped privilege diagnostic is missing.'
+
 ARGS=(--yes --plain --user "$USER_NAME" --docker-group --no-start-docker)
-bash "$SETUP" "${ARGS[@]}"
+# Exercise the same stdin execution mode used by the documented curl command.
+if ! cat "$SETUP" | bash -s -- "${ARGS[@]}" >/root/piped-setup.log 2>&1; then
+    cat /root/piped-setup.log
+    fail 'Piped installation failed.'
+fi
+cat /root/piped-setup.log
+grep -Fq 'Setup complete.' /root/piped-setup.log || fail 'Piped installation did not finish.'
+if grep -Fq 'unbound variable' /root/piped-setup.log; then fail 'Piped execution assumed a source file.'; fi
 sha256sum /usr/sbin/policy-rc.d >/root/policy-after.snapshot
 stat -c '%F %a %U %G %Y %N' /usr/sbin/policy-rc.d >>/root/policy-after.snapshot
 diff -u /root/policy-before.snapshot /root/policy-after.snapshot || fail 'Existing service policy was not restored.'

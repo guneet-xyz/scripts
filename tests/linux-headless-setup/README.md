@@ -25,7 +25,8 @@ backups, file timestamps, Docker package origins, service-policy restoration, an
 Neovim headless startup, then removes only its own container. It also checks the
 opt-in Docker upgrade path with the same release.
 Additional checks cover official-repository reuse, opt-in group access, terminal
-colors/spinner, `NO_COLOR`, and interactive cancellation.
+colors/spinner, `NO_COLOR`, interactive cancellation, and installation through
+Bash stdin (as used by the documented curl-to-Bash command).
 
 Only the installer folder and this test folder are copied into the container;
 the repository's `.git` directory and other scripts are not copied. The Docker

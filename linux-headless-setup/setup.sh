@@ -107,6 +107,8 @@ IFS=: read -r TARGET_USER _ TARGET_UID TARGET_GID _ TARGET_HOME TARGET_SHELL <<<
     die "User '$TARGET_USER' needs an existing, absolute home directory other than /."
 
 if ((EUID != 0)); then
+    [[ -n ${BASH_SOURCE[0]:-} ]] ||
+        die 'When piping the script, run it as root (e.g. curl ... | sudo bash -s -- --yes).'
     command -v sudo >/dev/null || die 'Run this script as root, or install sudo first.'
     SCRIPT_PATH=$(readlink -f -- "${BASH_SOURCE[0]}")
     SUDO_OPTIONS=()
@@ -236,7 +238,8 @@ run_step() {
     fi
     # Deliberately not in an if/|| expression: Bash's errexit must stay active
     # inside installation functions, including failures before their last command.
-    "$@" >>"$LOG_FILE" 2>&1
+    # Installation commands must not consume the script stream when using bash -s.
+    "$@" >>"$LOG_FILE" 2>&1 </dev/null
     stop_spinner
     printf '%s OK%s [%s/%s] %s - %s\n' "$GREEN" "$RESET" "$STEP" "$TOTAL_STEPS" "$title" "$STEP_RESULT"
 }
@@ -627,6 +630,10 @@ case "$DOCKER_SERVICE_STATE" in
         printf 'Without systemd, start Docker using your init system or a supervisor.\n'
         ;;
 esac
-printf 'Update Docker later through APT, or run: sudo bash %q --user %q --yes --upgrade-docker\n' \
-    "$(readlink -f -- "${BASH_SOURCE[0]}")" "$TARGET_USER"
+if [[ -n ${BASH_SOURCE[0]:-} ]]; then
+    printf 'Update Docker later through APT, or run: sudo bash %q --user %q --yes --upgrade-docker\n' \
+        "$(readlink -f -- "${BASH_SOURCE[0]}")" "$TARGET_USER"
+else
+    printf 'Update Docker later through APT, or rerun the download command with --upgrade-docker.\n'
+fi
 printf 'Full log: %s\n' "$LOG_FILE"

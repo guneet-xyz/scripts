@@ -13,6 +13,20 @@ outbound HTTPS access to GitHub and Docker, and working APT repositories.
 Debian 12+ and Ubuntu 22.04+ are the intended baseline; older distributions may
 lack btop or the libraries needed by the latest upstream binaries.
 
+Install directly without cloning the repository (requires `curl` and `sudo`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/guneet-xyz/scripts/main/linux-headless-setup/setup.sh \
+  | sudo bash -s -- --yes
+```
+
+Review [the installer](setup.sh) first: this executes remote code as root.
+The installer configures the invoking user's account rather than root's.
+`--yes` skips the confirmation prompt because Bash is reading the script from
+the pipe. Append other options after `--yes` as needed.
+
+Alternatively, use a local checkout:
+
 ```bash
 # From the repository root; configures the invoking user's home, not root's.
 ./linux-headless-setup/setup.sh
