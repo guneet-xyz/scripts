@@ -22,7 +22,7 @@ SPINNER_PID=''
 CURRENT_STEP=''
 STEP_RESULT=''
 STEP=0
-TOTAL_STEPS=15
+TOTAL_STEPS=17
 DOCKER_SERVICE_STATE=not-started
 POLICY_INSTALLED=0
 POLICY_BACKUP=''
@@ -39,7 +39,7 @@ usage() {
     cat <<'EOF'
 Usage: setup.sh [options]
 
-Install and configure zsh, Starship, zoxide, eza, btop, Neovim, and Docker.
+Install and configure zsh, Starship, zoxide, eza, btop, Neovim, Docker, Git, and Delta.
 Supports Debian-based Linux on amd64 and arm64. Needs root or sudo.
 
   -y, --yes             Accept the installation plan without prompting.
@@ -136,6 +136,7 @@ case "$(dpkg --print-architecture)" in
         NVIM_ARCH=x86_64
         TREE_SITTER_ARCH=x64
         EZA_TARGET=x86_64-unknown-linux-musl
+        DELTA_TARGET=x86_64-unknown-linux-musl
         ;;
     arm64)
         ARCH=arm64
@@ -143,6 +144,7 @@ case "$(dpkg --print-architecture)" in
         NVIM_ARCH=arm64
         TREE_SITTER_ARCH=arm64
         EZA_TARGET=aarch64-unknown-linux-gnu
+        DELTA_TARGET=aarch64-unknown-linux-gnu
         ;;
     *) die 'Only 64-bit amd64 and arm64 systems are supported.' ;;
 esac
@@ -156,8 +158,9 @@ fi
 
 printf '\n%sLinux Headless Setup%s\n' "$CYAN" "$RESET"
 printf '  System: %s (%s)\n  User:   %s (%s)\n\n' "${PRETTY_NAME:-Linux}" "$ARCH" "$TARGET_USER" "$TARGET_HOME"
-printf '  APT:    zsh, btop, and installation/runtime prerequisites\n'
-printf '  GitHub: latest stable Starship, zoxide, eza, and Neovim\n'
+printf '  APT:    Git, less, zsh, btop, and installation/runtime prerequisites\n'
+printf '  GitHub: latest stable Starship, zoxide, eza, Neovim, and Delta\n'
+printf '  Git:    gs/gl/gd shell aliases + Delta diff pager; preserve existing settings\n'
 if ((CONFIGURE_NEOVIM)); then
     printf '  Neovim: rice profile, Node LTS, Go, Python, formatters, and parsers\n'
     printf '          back up existing config; bootstrap tools as the target user\n'
@@ -283,7 +286,7 @@ as_user() {
 install_apt_packages() {
     local package
     local missing=()
-    local packages=(ca-certificates curl jq git tar xz-utils procps iptables util-linux passwd zsh btop)
+    local packages=(ca-certificates curl jq git less tar xz-utils procps iptables util-linux passwd zsh btop)
     if ((CONFIGURE_NEOVIM)); then
         packages+=(build-essential unzip ripgrep python3 python3-venv python3-pip xclip wl-clipboard)
     fi
@@ -860,6 +863,79 @@ verify_neovim_dependencies() {
     as_user lua-language-server --version --logpath="$TARGET_HOME/.cache/linux-headless-setup/lua-language-server"
 }
 
+configure_git() {
+    local config_dir="$TARGET_HOME/.config/linux-headless-setup" gitconfig="$TARGET_HOME/.gitconfig"
+    local start='# >>> linux-headless-setup git >>>' end='# <<< linux-headless-setup git <<<' backup directory
+    for directory in "$TARGET_HOME/.config" "$config_dir"; do
+        [[ -d $directory ]] || install -d -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "$directory"
+    done
+    cat >"$WORK_DIR/git-delta.gitconfig" <<'EOF'
+# Managed by linux-headless-setup.
+[core]
+    pager = delta
+[interactive]
+    diffFilter = delta --color-only
+[delta]
+    navigate = true
+EOF
+    if ! cmp -s "$WORK_DIR/git-delta.gitconfig" "$config_dir/git-delta.gitconfig"; then
+        if [[ -e $config_dir/git-delta.gitconfig || -L $config_dir/git-delta.gitconfig ]]; then
+            grep -Fxq "$MANAGED_MARKER" "$config_dir/git-delta.gitconfig" ||
+                die "Refusing to replace unmanaged Git config: $config_dir/git-delta.gitconfig"
+        fi
+        install -m 0644 -o "$TARGET_UID" -g "$TARGET_GID" "$WORK_DIR/git-delta.gitconfig" "$config_dir/git-delta.gitconfig"
+    fi
+    printf '%s\n' "$start" >"$WORK_DIR/git-source-block"
+    git config --file "$WORK_DIR/git-source-block" include.path "$config_dir/git-delta.gitconfig"
+    printf '%s\n' "$end" >>"$WORK_DIR/git-source-block"
+    [[ ! -L $gitconfig || -e $gitconfig ]] || die "Broken Git config symlink: $gitconfig"
+    [[ ! -e $gitconfig || -f $gitconfig ]] || die "Not a regular Git config file: $gitconfig"
+    if [[ -e $gitconfig ]]; then
+        # Preserve other settings and any dotfiles symlink; our include is scoped
+        # to Delta's three keys, not Git identity, credentials, or repositories.
+        awk -v start="$start" -v end="$end" -v block="$WORK_DIR/git-source-block" '
+            function emit( line) {
+                while ((getline line < block) > 0) print line
+                close(block)
+            }
+            $0 == start {
+                if (inside) { bad = 1; exit 2 }
+                if (!seen) emit()
+                seen = 1; inside = 1; next
+            }
+            $0 == end {
+                if (!inside) { bad = 1; exit 2 }
+                inside = 0; next
+            }
+            !inside { print }
+            END {
+                if (bad || inside) exit 2
+                if (!seen) { if (NR) print ""; emit() }
+            }
+        ' "$gitconfig" >"$WORK_DIR/gitconfig"
+    else
+        cp "$WORK_DIR/git-source-block" "$WORK_DIR/gitconfig"
+    fi
+    # Validate syntax without logging unrelated (potentially sensitive) values.
+    git config --no-includes --file "$WORK_DIR/gitconfig" --list >/dev/null
+    if ! cmp -s "$WORK_DIR/gitconfig" "$gitconfig"; then
+        if [[ -e $gitconfig ]]; then
+            backup=$(mktemp "$gitconfig.bak.XXXXXXXX")
+            cat "$gitconfig" >"$backup"
+            chown "$TARGET_UID:$TARGET_GID" "$backup"
+            printf 'Backed up existing Git config to %s\n' "$backup"
+            cat "$WORK_DIR/gitconfig" >"$gitconfig"
+        else
+            install -m 0644 -o "$TARGET_UID" -g "$TARGET_GID" "$WORK_DIR/gitconfig" "$gitconfig"
+        fi
+    fi
+    [[ $(as_user git config --global --includes --get core.pager) == delta ]] ||
+        die 'Another global Git include overrides Delta. Review the include order in ~/.gitconfig.'
+    [[ $(as_user git config --global --includes --get interactive.diffFilter) == 'delta --color-only' ]] ||
+        die 'Another global Git include overrides the Delta interactive diff filter.'
+    result 'Git uses Delta for diffs; existing identity and unrelated settings preserved'
+}
+
 configure_shell() {
     local config_dir="$TARGET_HOME/.config/linux-headless-setup" zshrc="$TARGET_HOME/.zshrc"
     local start='# >>> linux-headless-setup >>>' end='# <<< linux-headless-setup <<<' backup directory
@@ -888,10 +964,29 @@ autoload -Uz compinit
 (( $+functions[compdef] )) || compinit
 
 if (( $+commands[eza] )); then
-    (( $+aliases[ls] )) || alias ls='eza --icons=auto --group-directories-first'
-    (( $+aliases[ll] )) || alias ll='eza -lh --icons=auto --group-directories-first'
-    (( $+aliases[la] )) || alias la='eza -lah --icons=auto --group-directories-first'
-    (( $+aliases[lt] )) || alias lt='eza --tree --level=2 --icons=auto'
+    # Upgrade earlier managed definitions even when ~/.zshrc is sourced again;
+    # preserve unrelated personal aliases rather than replacing their commands.
+    case "${aliases[ls]-}" in
+        '' | 'eza --group-directories-first' | 'eza --icons=auto --group-directories-first')
+            alias ls='eza --icons=always --group-directories-first' ;;
+    esac
+    case "${aliases[ll]-}" in
+        '' | 'eza -lh --group-directories-first' | 'eza -lh --icons=auto --group-directories-first')
+            alias ll='eza -lh --icons=always --group-directories-first' ;;
+    esac
+    case "${aliases[la]-}" in
+        '' | 'eza -lah --group-directories-first' | 'eza -lah --icons=auto --group-directories-first')
+            alias la='eza -lah --icons=always --group-directories-first' ;;
+    esac
+    case "${aliases[lt]-}" in
+        '' | 'eza --tree --level=2' | 'eza --tree --level=2 --icons=auto')
+            alias lt='eza --tree --level=2 --icons=always' ;;
+    esac
+fi
+if (( $+commands[git] )); then
+    (( $+aliases[gs] )) || alias gs='git status --short'
+    (( $+aliases[gl] )) || alias gl='git log --oneline'
+    (( $+aliases[gd] )) || alias gd='git diff'
 fi
 if (( $+commands[zoxide] )); then
     eval "$(zoxide init zsh)"
@@ -970,7 +1065,7 @@ EOF
 
 verify_tools() {
     local command executable
-    for command in zsh starship zoxide eza btop nvim docker; do
+    for command in zsh starship zoxide eza btop nvim docker git delta; do
         executable=$(command -v "$command")
         printf '%s\n' "$executable"
         as_user "$executable" --version
@@ -984,15 +1079,16 @@ verify_tools() {
     fi
     # No plugins, user init, or ShaDa writes during the smoke check.
     as_user "$BIN_DIR/nvim" --headless -u NONE -i NONE '+quit'
-    result 'All seven tools verified; Neovim headless startup passed'
+    result 'All nine tools verified; Neovim headless startup passed'
 }
 
 printf '\nDetailed log: %s\n\n' "$LOG_FILE"
 check_docker_conflicts
-run_step 'Install zsh, btop, and prerequisites' install_apt_packages
+run_step 'Install Git, zsh, btop, and prerequisites' install_apt_packages
 run_step 'Install Starship' install_github_tool starship starship starship/starship "^starship-$RUST_ARCH-unknown-linux-musl\\.tar\\.gz$"
 run_step 'Install zoxide' install_github_tool zoxide zoxide ajeetdsouza/zoxide "^zoxide-[0-9.]+-$RUST_ARCH-unknown-linux-musl\\.tar\\.gz$"
 run_step 'Install eza' install_github_tool eza eza eza-community/eza "^eza_$EZA_TARGET\\.tar\\.gz$"
+run_step 'Install Delta for Git diffs' install_github_tool delta delta dandavison/delta "^delta-[0-9.]+-$DELTA_TARGET\\.tar\\.gz$"
 run_step 'Install latest stable Neovim' install_github_tool neovim nvim neovim/neovim "^nvim-linux-$NVIM_ARCH\\.tar\\.gz$"
 run_step 'Install Tree-sitter CLI for Neovim' install_treesitter_cli
 run_step 'Install current Node.js LTS and npm' install_nodejs
@@ -1002,6 +1098,7 @@ run_step 'Configure Neovim from rice' configure_neovim
 run_step 'Install and verify Neovim dependency tools' install_neovim_dependencies
 run_step 'Install Docker from its official APT repository' install_docker
 run_step 'Configure Docker service' configure_docker_service
+run_step 'Configure Git and Delta' configure_git
 run_step 'Configure user shell and permissions' configure_shell
 run_step 'Verify installation' verify_tools
 

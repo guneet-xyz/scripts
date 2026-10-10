@@ -1,10 +1,10 @@
 # Linux headless setup
 
 An idempotent Bash installer for a Debian-based headless machine. It sets up
-**zsh, Starship, zoxide, eza, btop, Neovim, and Docker**, with numbered steps,
+**zsh, Starship, zoxide, eza, btop, Neovim, Docker, Git, and Delta**, with numbered steps,
 an animated terminal spinner, color-aware status messages, and a persistent log.
 Neovim uses the default profile from [guneet-xyz/rice](https://github.com/guneet-xyz/rice),
-and the managed eza aliases show icons in interactive terminals.
+and the managed eza aliases explicitly enable icons, including in piped output.
 The UI is native Bash, so it does not need Gum or another bootstrap dependency.
 Redirected output automatically uses readable, non-animated progress messages.
 
@@ -69,10 +69,11 @@ sudo --preserve-env=GITHUB_TOKEN ./linux-headless-setup/setup.sh --yes --user "$
 
 | Tool | Source / location |
 | --- | --- |
-| zsh, btop | Distribution APT packages. |
+| Git, less, zsh, btop | Distribution APT packages. Git is installed explicitly; less is available for Delta's pager. |
 | Starship | Latest stable `starship/starship` GitHub release; Linux musl binary. |
 | zoxide | Latest stable `ajeetdsouza/zoxide` GitHub release; Linux musl binary. |
 | eza | Latest stable `eza-community/eza` GitHub release; musl on amd64, GNU on arm64. |
+| Delta | Latest stable `dandavison/delta` GitHub release; musl on amd64, GNU on arm64; SHA-256 verified. |
 | Neovim | Latest stable `neovim/neovim` GitHub release; full Linux tarball, **not APT or AppImage**. Includes its runtime and needs no FUSE. |
 | Neovim config | The `nvim/.config/nvim` folder from `guneet-xyz/rice`, linked into the target user's `~/.config/nvim`. No other rice packages are installed. |
 | Neovim runtimes | Current Node.js **LTS** (including npm/npx), stable Go (including gofmt), and compatible Helm 3, from official archives with published SHA-256 checksums. Python 3, pip, and venv support come from APT. |
@@ -126,9 +127,14 @@ manage that tool.
   backup is created **only when an existing file needs to change**.
 - Shell integration lives in `~/.config/linux-headless-setup/zshrc`. It configures
   history, completion, Starship, zoxide's `z` command, `EDITOR`/`VISUAL` defaults,
-  and `ls`/`ll`/`la`/`lt` aliases for eza with `--icons=auto` (icons on a TTY,
-  plain output when piped). Existing aliases and editor choices are respected.
+  and `ls`/`ll`/`la`/`lt` aliases for eza with `--icons=always`. Earlier managed
+  definitions are upgraded when the shell integration is sourced again. Other
+  personal aliases and editor choices are respected.
   Put personal edits in `.zshrc`, not the generated integration file.
+- Git's global config gets one managed include for Delta. Existing identity,
+  credentials, aliases, other settings, and `.gitconfig` symlinks are preserved.
+  A private `.gitconfig.bak.*` backup is created only when an existing file
+  actually changes; reruns do not add duplicate includes or backups.
 - zsh becomes the login shell unless disabled. Docker group membership is never
   granted unless you explicitly pass `--docker-group`.
 - Logs are retained at `/var/log/linux-headless-setup.*.log`, readable only by
@@ -185,7 +191,38 @@ git -C "$HOME/.local/share/linux-headless-setup/rice" pull --ff-only
 Both eza icons and rice's Neovim settings expect a **Nerd Font in your local
 terminal/SSH client**. Installing fonts on the headless server would not change
 the font used by your local terminal. Existing custom aliases are not overridden;
-add `--icons=auto` to any personal eza aliases if needed.
+add `--icons=always` to any personal eza aliases if needed. Use
+`eza --icons=never` directly when plain output is required.
+
+## Git aliases and Delta
+
+The managed zsh integration supplies:
+
+| Command | Expansion |
+| --- | --- |
+| `gs` | `git status --short` |
+| `gl` | `git log --oneline` |
+| `gd` | `git diff` |
+
+An existing personal alias with one of these names is not overwritten.
+
+Delta is configured in `~/.config/linux-headless-setup/git-delta.gitconfig`,
+included from `~/.gitconfig`:
+
+```gitconfig
+[core]
+    pager = delta
+[interactive]
+    diffFilter = delta --color-only
+[delta]
+    navigate = true
+```
+
+Git uses Delta when displaying paged diffs, log patches, and similar output in
+a terminal. Interactive staging uses Delta's color-only filter. Normal redirects
+and pipes keep Git's standard non-pager behavior. Per-repository configuration
+and `GIT_PAGER` can still override the global pager. No Git name/email or merge
+conflict style is chosen by the installer.
 
 ## Docker notes
 
@@ -222,6 +259,8 @@ zsh --version
 starship --version
 zoxide --version
 eza --version
+git --version
+delta --version
 btop --version
 nvim --version
 sudo docker run --rm hello-world

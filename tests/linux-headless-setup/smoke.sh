@@ -100,9 +100,12 @@ runuser -u "$USER_NAME" -- git -C "$RICE_DIR" remote get-url origin | grep -Fx '
 runuser -u "$USER_NAME" -- env TERM=xterm zsh -ic '
     [[ $KEEP_EXISTING_CONFIG == yes ]] || exit 1
     [[ $aliases[ll] == "echo custom-alias" ]] || exit 1
-    [[ $aliases[ls] == "eza --icons=auto --group-directories-first" ]] || exit 1
-    [[ $aliases[la] == "eza -lah --icons=auto --group-directories-first" ]] || exit 1
-    [[ $aliases[lt] == "eza --tree --level=2 --icons=auto" ]] || exit 1
+    [[ $aliases[ls] == "eza --icons=always --group-directories-first" ]] || exit 1
+    [[ $aliases[la] == "eza -lah --icons=always --group-directories-first" ]] || exit 1
+    [[ $aliases[lt] == "eza --tree --level=2 --icons=always" ]] || exit 1
+    [[ $aliases[gs] == "git status --short" ]] || exit 1
+    [[ $aliases[gl] == "git log --oneline" ]] || exit 1
+    [[ $aliases[gd] == "git diff" ]] || exit 1
     (( $+functions[z] && $+functions[prompt_starship_precmd] )) || exit 1
     [[ $EDITOR == nvim ]] || exit 1
     [[ $(command -v nvim) == /usr/local/bin/nvim ]] || exit 1
@@ -134,9 +137,11 @@ done
 runuser -u "$USER_NAME" -- nvim --headless -u NONE -i NONE \
     "+lua for _, lang in ipairs({'typescript','tsx','javascript','yaml','helm','python','go'}) do if not pcall(vim.treesitter.language.add, lang) then vim.cmd('cquit 1') end end" '+quit'
 
-for tool in zsh starship zoxide eza btop nvim docker dockerd; do
+for tool in zsh starship zoxide eza btop nvim docker dockerd git delta; do
     "$tool" --version
 done
+[[ $(runuser -u "$USER_NAME" -- git config --global --includes --get core.pager) == delta ]] || fail 'Delta pager was not configured.'
+[[ $(runuser -u "$USER_NAME" -- git config --global --includes --get interactive.diffFilter) == 'delta --color-only' ]] || fail 'Delta interactive diff filter was not configured.'
 for package in neovim docker.io; do
     [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) != 'install ok installed' ]] ||
         fail "$package was installed via APT."

@@ -7,6 +7,14 @@ if (($# > 1)) || [[ ${1:-} == -* ]]; then
     exit 1
 fi
 IMAGE=${1:-debian:bookworm-slim}
+case "${TEST_SUITE:-full}" in
+    full) TEST_SCRIPT=smoke.sh ;;
+    git) TEST_SCRIPT=git-smoke.sh ;;
+    *)
+        printf 'TEST_SUITE must be full or git.\n' >&2
+        exit 1
+        ;;
+esac
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 CONTAINER=''
@@ -26,5 +34,5 @@ docker cp "$SCRIPT_DIR/." "$CONTAINER:/opt/headless-setup-tests"
 docker start "$CONTAINER" >/dev/null
 ENV_OPTIONS=()
 [[ -z ${GITHUB_TOKEN:-} ]] || ENV_OPTIONS+=(--env GITHUB_TOKEN)
-docker exec "${ENV_OPTIONS[@]}" "$CONTAINER" bash /opt/headless-setup-tests/smoke.sh
+docker exec "${ENV_OPTIONS[@]}" "$CONTAINER" bash "/opt/headless-setup-tests/$TEST_SCRIPT"
 printf '\nContainer smoke test passed (%s).\n' "$IMAGE"

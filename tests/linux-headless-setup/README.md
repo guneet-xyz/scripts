@@ -11,6 +11,10 @@ From the repository root, with a working Docker daemon:
 ./tests/linux-headless-setup/test-in-docker.sh
 # Optional alternative base image:
 ./tests/linux-headless-setup/test-in-docker.sh ubuntu:24.04
+
+# Fast Git/Delta/icon regression suite (skips Neovim's dependency bootstrap):
+TEST_SUITE=git ./tests/linux-headless-setup/test-in-docker.sh
+TEST_SUITE=git ./tests/linux-headless-setup/test-in-docker.sh ubuntu:24.04
 ```
 
 The runner resolves paths relative to its own location, so it also works when
@@ -38,6 +42,10 @@ rice's real plugin bootstrap and check its Node/npm/Python/Go runtimes, configur
 Mason tools, offline npx/Prettier resolution, and native Helm/MDX parser loading.
 Runtime logs/caches and Go telemetry are excluded from filesystem-idempotence
 snapshots; installed files, config content, ownership, and permissions are checked.
+The Git suite additionally checks identity/settings preservation, `.gitconfig`
+symlinks and one-time backups, alias behavior in a real repository, Delta pager
+invocation/rendering, icons even in captured output, and upgrades of older
+managed eza definitions when the shell configuration is sourced again.
 
 Only the installer folder and this test folder are copied into the container;
 the repository's `.git` directory and other scripts are not copied. The Docker
