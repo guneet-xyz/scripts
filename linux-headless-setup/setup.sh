@@ -19,6 +19,7 @@ TARGET_USER=${SUDO_USER:-$(id -un)}
 WORK_DIR=''
 LOG_FILE=''
 SPINNER_PID=''
+OUTPUT_DONE=''
 CURRENT_STEP=''
 STEP_RESULT=''
 STEP=0
@@ -150,10 +151,11 @@ case "$(dpkg --print-architecture)" in
 esac
 
 export PATH="$BIN_DIR:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-CYAN='' GREEN='' YELLOW='' RED='' RESET=''
+CYAN='' GREEN='' YELLOW='' RED='' DIM='' RESET=''
 if [[ -t 1 && ${TERM:-dumb} != dumb && ! ${NO_COLOR+x} ]] && ((! PLAIN)); then
     CYAN=$'\033[1;36m' GREEN=$'\033[1;32m' YELLOW=$'\033[1;33m'
     RED=$'\033[1;31m' RESET=$'\033[0m'
+    DIM=$'\033[2;90m'
 fi
 
 printf '\n%sLinux Headless Setup%s\n' "$CYAN" "$RESET"
@@ -192,15 +194,86 @@ exec 3>&1 4>&2
 
 stop_spinner() {
     if [[ -n $SPINNER_PID ]]; then
-        kill "$SPINNER_PID" 2>/dev/null || true
-        wait "$SPINNER_PID" 2>/dev/null || true
+        # The renderer reads a regular file, not a pipeline: even an ERR trap
+        # inside a redirected function can drain output without waiting for EOF
+        # on its own still-open stdout. It owns all live terminal writes.
+        local status=0
+        touch -- "$OUTPUT_DONE"
+        wait "$SPINNER_PID" || status=$?
         SPINNER_PID=''
-        printf '\r\033[2K' >&3
+        OUTPUT_DONE=''
+        return "$status"
+    fi
+}
+
+print_log_line() {
+    local text=$1 fd=${2:-3}
+    local ansi_pattern=$'\033''\[[0-?]*[ -/]*[@-~]'
+    # Strip command styling/control sequences only from terminal output. The
+    # persistent log retains the original bytes for troubleshooting.
+    while [[ $text =~ $ansi_pattern ]]; do
+        text=${text//"${BASH_REMATCH[0]}"/}
+    done
+    text=${text//$'\r'/}
+    text=${text//$'\033'/?}
+    printf '%s%s%s\n' "$DIM" "$text" "$RESET" >&"$fd"
+}
+
+render_step_output() {
+    local output=$1 done=$2 title=$3 animated=$4
+    local line pending='' frame=0 width=${COLUMNS:-80} terminal_size
+    local frames=('|' '/' '-' "\\")
+    local status="[$STEP/$TOTAL_STEPS] $title"
+    if ((animated)) && terminal_size=$(stty size <&3 2>/dev/null); then
+        [[ ${terminal_size##* } == 0 ]] || width=${terminal_size##* }
+    fi
+    [[ $width =~ ^[0-9]+$ ]] && ((width >= 10)) || width=80
+    # Keep the status on one row; long command output can wrap normally.
+    status=${status:0:width-3}
+    exec 5<"$output"
+    trap - ERR EXIT
+    if ((animated)); then
+        trap 'printf "\r\033[2K\033[?25h" >&3; exit 0' INT TERM
+        printf '\033[?25l\n%s%s %s%s' "$CYAN" "${frames[0]}" "$status" "$RESET" >&3
+    fi
+    while :; do
+        # Bash's read returns partial data at EOF. Keep it until a newline or
+        # step completion, and log the original bytes without ANSI decoration.
+        while :; do
+            line=''
+            if IFS= read -r line <&5; then
+                printf '%s\n' "$line" >>"$LOG_FILE"
+                pending+=$line
+            else
+                if [[ -n $line ]]; then
+                    printf '%s' "$line" >>"$LOG_FILE"
+                    pending+=$line
+                fi
+                [[ -e $done && -n $pending ]] || break
+            fi
+            if ((animated)); then
+                printf '\r\033[2K\033[1A\r\033[2K' >&3
+                print_log_line "$pending"
+                printf '\n%s%s %s%s' "$CYAN" "${frames[frame % 4]}" "$status" "$RESET" >&3
+            else
+                print_log_line "$pending"
+            fi
+            pending=''
+        done
+        [[ ! -e $done ]] || break
+        if ((animated)); then
+            frame=$((frame + 1))
+            printf '\r\033[2K%s%s %s%s' "$CYAN" "${frames[frame % 4]}" "$status" "$RESET" >&3
+        fi
+        sleep 0.12
+    done
+    if ((animated)); then
+        printf '\r\033[2K\033[?25h' >&3
     fi
 }
 
 cleanup() {
-    stop_spinner
+    stop_spinner || true
     restore_service_policy
     # Every path here was created with mktemp by this invocation.
     local path
@@ -215,12 +288,14 @@ has_systemd() {
 }
 
 on_error() {
-    local status=$1 line=$2
+    local status=$1 line=$2 log_line
     trap - ERR
-    stop_spinner
+    stop_spinner || true
     printf '\n%sFAILED%s [%s/%s] %s (line %s, exit %s)\n' \
         "$RED" "$RESET" "$STEP" "$TOTAL_STEPS" "$CURRENT_STEP" "$line" "$status" >&4
-    tail -n 30 "$LOG_FILE" >&4 || true
+    while IFS= read -r log_line; do
+        print_log_line "$log_line" 4
+    done < <(tail -n 30 "$LOG_FILE")
     printf '\nFull log: %s\n' "$LOG_FILE" >&4
     exit "$status"
 }
@@ -237,32 +312,28 @@ result() {
 
 run_step() {
     local title=$1
+    local output animated=0
     shift
     STEP=$((STEP + 1))
     CURRENT_STEP=$title
     STEP_RESULT='Done'
     printf '\n[%s/%s] %s\n' "$STEP" "$TOTAL_STEPS" "$title" >>"$LOG_FILE"
+    output="$WORK_DIR/step-$STEP.output"
+    OUTPUT_DONE="$WORK_DIR/step-$STEP.done"
+    : >"$output"
     if [[ -t 1 && ${TERM:-dumb} != dumb ]] && ((! PLAIN)); then
-        (
-            trap - ERR EXIT
-            trap 'exit 0' INT TERM
-            frames=('|' '/' '-' "\\")
-            i=0
-            while :; do
-                printf '\r%s[%s/%s]%s %s %s' "$CYAN" "$STEP" "$TOTAL_STEPS" "$RESET" "${frames[i % 4]}" "$title" >&3
-                i=$((i + 1))
-                sleep 0.12
-            done
-        ) &
-        SPINNER_PID=$!
+        animated=1
     else
         printf '[%s/%s] %s...\n' "$STEP" "$TOTAL_STEPS" "$title"
     fi
+    render_step_output "$output" "$OUTPUT_DONE" "$title" "$animated" &
+    SPINNER_PID=$!
     # Deliberately not in an if/|| expression: Bash's errexit must stay active
     # inside installation functions, including failures before their last command.
     # Installation commands must not consume the script stream when using bash -s.
-    "$@" >>"$LOG_FILE" 2>&1 </dev/null
+    "$@" >>"$output" 2>&1 </dev/null
     stop_spinner
+    rm -- "$output" "$WORK_DIR/step-$STEP.done"
     printf '%s OK%s [%s/%s] %s - %s\n' "$GREEN" "$RESET" "$STEP" "$TOTAL_STEPS" "$title" "$STEP_RESULT"
 }
 

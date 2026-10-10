@@ -2,11 +2,19 @@
 
 An idempotent Bash installer for a Debian-based headless machine. It sets up
 **zsh, Starship, zoxide, eza, btop, Neovim, Docker, Git, and Delta**, with numbered steps,
-an animated terminal spinner, color-aware status messages, and a persistent log.
+live command output, an animated terminal spinner, and a persistent log.
 Neovim uses the default profile from [guneet-xyz/rice](https://github.com/guneet-xyz/rice),
 and the managed eza aliases explicitly enable icons, including in piped output.
 The UI is native Bash, so it does not need Gum or another bootstrap dependency.
 Redirected output automatically uses readable, non-animated progress messages.
+
+In a terminal, stdout and stderr stream in dimmed gray text. A blank line
+separates the output from the current step's spinner beneath it. The spinner
+stays below new output and is replaced by an `OK` or `FAILED` status when the
+step finishes. `--plain` disables terminal controls and styling; `NO_COLOR`
+disables colors/dimming while retaining the spinner. The persistent log retains
+original command output, including any command-generated color codes. Displayed
+output strips those codes so commands cannot overwrite the status footer.
 
 ## Run
 

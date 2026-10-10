@@ -15,6 +15,9 @@ From the repository root, with a working Docker daemon:
 # Fast Git/Delta/icon regression suite (skips Neovim's dependency bootstrap):
 TEST_SUITE=git ./tests/linux-headless-setup/test-in-docker.sh
 TEST_SUITE=git ./tests/linux-headless-setup/test-in-docker.sh ubuntu:24.04
+
+# Local renderer tests; needs Python 3, no Docker or package installs:
+python3 ./tests/linux-headless-setup/ui-smoke.py
 ```
 
 The runner resolves paths relative to its own location, so it also works when
@@ -46,6 +49,10 @@ The Git suite additionally checks identity/settings preservation, `.gitconfig`
 symlinks and one-time backups, alias behavior in a real repository, Delta pager
 invocation/rendering, icons even in captured output, and upgrades of older
 managed eza definitions when the shell configuration is sourced again.
+The local UI suite uses pseudo-terminals and pipes to check live stdout/stderr,
+dimmed output, a blank spacer above a single bottom status line, wrapped and
+partial lines, color-free output, cursor restoration, unmodified persistent
+logs, and fail-fast propagation of a failure inside a step function.
 
 Only the installer folder and this test folder are copied into the container;
 the repository's `.git` directory and other scripts are not copied. The Docker
