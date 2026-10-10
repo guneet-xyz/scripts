@@ -1059,6 +1059,9 @@ if (( $+commands[git] )); then
     (( $+aliases[gl] )) || alias gl='git log --oneline'
     (( $+aliases[gd] )) || alias gd='git diff'
 fi
+if (( $+commands[nvim] )); then
+    (( $+aliases[v] )) || alias v='nvim'
+fi
 if (( $+commands[zoxide] )); then
     eval "$(zoxide init zsh)"
 fi

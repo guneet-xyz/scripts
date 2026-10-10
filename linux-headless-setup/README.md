@@ -134,7 +134,7 @@ manage that tool.
   is preserved, including an existing `.zshrc` symlink. A private `.zshrc.bak.*`
   backup is created **only when an existing file needs to change**.
 - Shell integration lives in `~/.config/linux-headless-setup/zshrc`. It configures
-  history, completion, Starship, zoxide's `z` command, `EDITOR`/`VISUAL` defaults,
+  history, completion, Starship, zoxide's `z` command, `v` → `nvim`, `EDITOR`/`VISUAL` defaults,
   and `ls`/`ll`/`la`/`lt` aliases for eza with `--icons=always`. Earlier managed
   definitions are upgraded when the shell integration is sourced again. Other
   personal aliases and editor choices are respected.
@@ -159,6 +159,10 @@ replaced, and no terminal fonts are installed on the headless server.
 The installer uses rice's `nvim` **default** profile directly, without requiring
 the easyrice CLI or changing the upstream configuration. The checkout and
 config symlink are user-owned. Use `--no-neovim-config` to opt out.
+
+The managed zsh integration also provides `v` as a shortcut for `nvim`, unless
+you already have a personal `v` alias. Reload your shell with `source ~/.zshrc`
+after rerunning setup to use the shortcut.
 
 Tree-sitter's official binaries require newer system libraries on some releases.
 On older hosts such as Debian 12 and Ubuntu 22.04, the installer falls back to

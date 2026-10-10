@@ -73,6 +73,8 @@ runuser -u "$USER_NAME" -- env TEST_REPO="$REPO" TERM=xterm zsh -ic '
     [[ $aliases[gs] == "git status --short" ]] || exit 1
     [[ $aliases[gl] == "git log --oneline" ]] || exit 1
     [[ $aliases[gd] == "git diff" ]] || exit 1
+    [[ $aliases[v] == "nvim" ]] || exit 1
+    [[ $(v --version) == *NVIM* ]] || exit 1
     [[ $aliases[ll] == "echo personal-alias" ]] || exit 1
     [[ $aliases[ls] == "eza --icons=always --group-directories-first" ]] || exit 1
     [[ $aliases[la] == "eza -lah --icons=always --group-directories-first" ]] || exit 1
@@ -104,10 +106,13 @@ runuser -u "$USER_NAME" -- delta --version
 
 # Confirm aliases chosen by the user are not silently discarded.
 useradd --create-home --shell /bin/bash git-custom
-printf '%s\n' "alias gs='echo personal-status'" >/home/git-custom/.zshrc
+printf '%s\n' "alias gs='echo personal-status'" "alias v='echo personal-editor'" >/home/git-custom/.zshrc
 chown git-custom:git-custom /home/git-custom/.zshrc
 bash "$SETUP" --yes --plain --user git-custom --no-change-shell --no-start-docker --no-neovim-config
 # shellcheck disable=SC2016
-runuser -u git-custom -- zsh -ic '[[ $aliases[gs] == "echo personal-status" ]]' || fail 'A personal Git alias was replaced.'
+runuser -u git-custom -- zsh -ic '
+    [[ $aliases[gs] == "echo personal-status" ]] &&
+    [[ $aliases[v] == "echo personal-editor" ]]
+' || fail 'A personal Git or editor alias was replaced.'
 
 printf '\nAll Git/Delta/icon assertions passed.\n'

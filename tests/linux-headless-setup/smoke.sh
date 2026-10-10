@@ -106,6 +106,7 @@ runuser -u "$USER_NAME" -- env TERM=xterm zsh -ic '
     [[ $aliases[gs] == "git status --short" ]] || exit 1
     [[ $aliases[gl] == "git log --oneline" ]] || exit 1
     [[ $aliases[gd] == "git diff" ]] || exit 1
+    [[ $aliases[v] == "nvim" ]] || exit 1
     (( $+functions[z] && $+functions[prompt_starship_precmd] )) || exit 1
     [[ $EDITOR == nvim ]] || exit 1
     [[ $(command -v nvim) == /usr/local/bin/nvim ]] || exit 1
