@@ -31,6 +31,7 @@ printf '%s\n' "alias ll='echo personal-alias'" \
 chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
 ARGS=(--yes --plain --user "$USER_NAME" --no-change-shell --no-start-docker --no-neovim-config)
 bash "$SETUP" "${ARGS[@]}"
+[[ ! -e /usr/local/bin/helm && ! -e /opt/linux-headless-setup/helm ]] || fail 'Default setup installed Helm.'
 
 snapshot() {
     find /opt/linux-headless-setup/delta "$HOME_DIR/.config/linux-headless-setup" \
@@ -108,7 +109,10 @@ runuser -u "$USER_NAME" -- delta --version
 useradd --create-home --shell /bin/bash git-custom
 printf '%s\n' "alias gs='echo personal-status'" "alias v='echo personal-editor'" >/home/git-custom/.zshrc
 chown git-custom:git-custom /home/git-custom/.zshrc
-bash "$SETUP" --yes --plain --user git-custom --no-change-shell --no-start-docker --no-neovim-config
+bash "$SETUP" --yes --plain --user git-custom --no-change-shell --no-start-docker --no-neovim-config --with-helm
+runuser -u git-custom -- helm version --short
+[[ -L /usr/local/bin/helm ]] || fail '--with-helm did not install the CLI.'
+[[ ! -e /home/git-custom/.local/share/nvim/mason ]] || fail 'CLI-only Helm opt-in bootstrapped Neovim tooling.'
 # shellcheck disable=SC2016
 runuser -u git-custom -- zsh -ic '
     [[ $aliases[gs] == "echo personal-status" ]] &&

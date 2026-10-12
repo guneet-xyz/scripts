@@ -118,7 +118,7 @@ runuser -u "$USER_NAME" -- nvim --headless -u NONE -i NONE '+quit'
 runuser -u "$USER_NAME" -- env RICE_OPTIONS="$HOME_DIR/.config/nvim/lua/custom/options.lua" \
     nvim --headless -u NONE -i NONE \
     "+lua dofile(vim.env.RICE_OPTIONS); if vim.g.mapleader ~= ',' or vim.g.have_nerd_font ~= true then vim.cmd('cquit 1') end" '+quit'
-for dependency in cc make unzip rg tree-sitter node npm npx python3 go gofmt helm; do
+for dependency in cc make unzip rg tree-sitter node npm npx python3 go gofmt; do
     # shellcheck disable=SC2016
     runuser -u "$USER_NAME" -- sh -c 'command -v "$1"' test "$dependency" >/dev/null || fail "Missing Neovim dependency: $dependency"
 done
@@ -129,14 +129,17 @@ runuser -u "$USER_NAME" -- env PATH="$MASON_BIN:$HOME_DIR/.local/bin:$PATH" NPM_
 runuser -u "$USER_NAME" -- python3 -c 'import venv, ensurepip'
 runuser -u "$USER_NAME" -- node -e 'if (Number(process.versions.node.split(".")[0]) < 24) process.exit(1)'
 for dependency in lua-language-server pylsp vscode-json-language-server typescript-language-server \
-    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat helm_ls yaml-language-server; do
+    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat; do
     [[ -x $MASON_BIN/$dependency ]] || fail "Missing configured Neovim tool: $dependency"
 done
 [[ $(stat -c %U "$NODE_PREFIX/lib/node_modules/prettier") == "$USER_NAME" ]] || fail 'Prettier was installed as root.'
 [[ $(stat -c %U "$HOME_DIR/.local/share/nvim/mason") == "$USER_NAME" ]] || fail 'Mason tools were installed as root.'
 # Load the installed native parser modules with plugins/config disabled.
 runuser -u "$USER_NAME" -- nvim --headless -u NONE -i NONE \
-    "+lua for _, lang in ipairs({'typescript','tsx','javascript','yaml','helm','python','go'}) do if not pcall(vim.treesitter.language.add, lang) then vim.cmd('cquit 1') end end" '+quit'
+    "+lua for _, lang in ipairs({'typescript','tsx','javascript','yaml','python','go'}) do if not pcall(vim.treesitter.language.add, lang) then vim.cmd('cquit 1') end end" '+quit'
+[[ ! -e /usr/local/bin/helm && ! -e /opt/linux-headless-setup/helm ]] || fail 'Helm CLI was installed without opting in.'
+[[ ! -e $MASON_BIN/helm_ls && ! -e $MASON_BIN/yaml-language-server ]] || fail 'Helm language tools were installed without opting in.'
+[[ ! -e $HOME_DIR/.local/share/nvim/site/parser/helm.so ]] || fail 'Helm parser was installed without opting in.'
 
 for tool in zsh starship zoxide eza btop nvim docker dockerd git delta; do
     "$tool" --version

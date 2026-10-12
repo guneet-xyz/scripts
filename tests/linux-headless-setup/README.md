@@ -18,6 +18,7 @@ TEST_SUITE=git ./tests/linux-headless-setup/test-in-docker.sh ubuntu:24.04
 
 # Local renderer tests; needs Python 3, no Docker or package installs:
 python3 ./tests/linux-headless-setup/ui-smoke.py
+python3 ./tests/linux-headless-setup/helm-options-smoke.py
 ```
 
 The runner resolves paths relative to its own location, so it also works when
@@ -42,13 +43,20 @@ Neovim checks cover the rice symlink and source layout, user ownership, private
 directory permissions, one-time backups, preservation of local edits, and
 `--no-neovim-config`. Eza aliases are checked for icon flags. The tests now execute
 rice's real plugin bootstrap and check its Node/npm/Python/Go runtimes, configured
-Mason tools, offline npx/Prettier resolution, and native Helm/MDX parser loading.
+Mason tools, offline npx/Prettier resolution, and native MDX parser loading.
+Default setup is checked for absence of Helm CLI/language-tool/parser installs.
 Runtime logs/caches and Go telemetry are excluded from filesystem-idempotence
 snapshots; installed files, config content, ownership, and permissions are checked.
 The Git suite additionally checks identity/settings preservation, `.gitconfig`
 symlinks and one-time backups, alias behavior in a real repository, Delta pager
 invocation/rendering, icons even in captured output, and upgrades of older
 managed eza definitions when the shell configuration is sourced again.
+It also exercises explicit `--with-helm --no-neovim-config` CLI-only opt-in.
+The local Helm option suite checks default/opt-in dependency selection, both
+flag orders, unchanged YAML/MDX dependencies, and absence of default Helm
+network/install calls without executing any machine setup steps.
+When `jq` is available it also runs the real opt-in version/checksum/URL control
+flow with network downloads and archive installation mocked.
 The local UI suite uses pseudo-terminals and pipes to check live stdout/stderr,
 dimmed output, a blank spacer above a single bottom status line, wrapped and
 partial lines, color-free output, cursor restoration, unmodified persistent

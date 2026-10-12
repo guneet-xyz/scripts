@@ -13,6 +13,7 @@ DOCKER_GROUP=0
 START_DOCKER=1
 UPGRADE_DOCKER=0
 CONFIGURE_NEOVIM=1
+WITH_HELM=0
 RICE_REPO=https://github.com/guneet-xyz/rice.git
 DOCKER_CODENAME=''
 TARGET_USER=${SUDO_USER:-$(id -un)}
@@ -30,11 +31,11 @@ POLICY_BACKUP=''
 TEMP_PATHS=()
 ORIGINAL_ARGS=("$@")
 NVIM_MASON_PACKAGES=(lua-language-server python-lsp-server json-lsp typescript-language-server
-    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat helm-ls yaml-language-server)
+    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat)
 NVIM_MASON_COMMANDS=(lua-language-server pylsp vscode-json-language-server typescript-language-server
-    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat helm_ls yaml-language-server)
+    stylua shfmt clang-format gofumpt yamlfmt isort ruff mdformat)
 NVIM_PARSERS=(bash c diff html lua luadoc markdown markdown_inline query vim vimdoc
-    typescript tsx javascript yaml helm python go json cpp java astro)
+    typescript tsx javascript yaml python go json cpp java astro)
 
 usage() {
     cat <<'EOF'
@@ -50,6 +51,7 @@ Supports Debian-based Linux on amd64 and arm64. Needs root or sudo.
   --no-start-docker     Suppress Docker/containerd starts, including APT hooks.
   --upgrade-docker      Upgrade official Docker packages (may restart Docker).
   --no-neovim-config    Keep Neovim config; skip rice and editor dependency setup.
+  --with-helm           Opt in to Helm CLI and optional Neovim Helm tooling.
   --docker-codename NAME  Use a base Debian/Ubuntu codename for a derivative.
   --plain               Disable colors and the animated spinner.
   -h, --help            Show this help.
@@ -83,6 +85,7 @@ while (($#)); do
         --no-start-docker) START_DOCKER=0 ;;
         --upgrade-docker) UPGRADE_DOCKER=1 ;;
         --no-neovim-config) CONFIGURE_NEOVIM=0 ;;
+        --with-helm) WITH_HELM=1 ;;
         --docker-codename)
             (($# >= 2)) && [[ -n $2 && $2 != -* ]] || die '--docker-codename requires a codename.'
             DOCKER_CODENAME=$2
@@ -97,6 +100,12 @@ while (($#)); do
     esac
     shift
 done
+
+if ((WITH_HELM && CONFIGURE_NEOVIM)); then
+    NVIM_MASON_PACKAGES+=(helm-ls yaml-language-server)
+    NVIM_MASON_COMMANDS+=(helm_ls yaml-language-server)
+    NVIM_PARSERS+=(helm)
+fi
 
 [[ $(uname -s) == Linux && -r /etc/os-release ]] || die 'This script requires Linux.'
 # shellcheck disable=SC1091
@@ -168,6 +177,11 @@ if ((CONFIGURE_NEOVIM)); then
     printf '          back up existing config; bootstrap tools as the target user\n'
 else
     printf '  Neovim: binary only; existing config will not be changed\n'
+fi
+if ((WITH_HELM)); then
+    printf '  Helm:   optional CLI enabled; Neovim Helm tools follow the config option\n'
+else
+    printf '  Helm:   skipped by default (use --with-helm to enable)\n'
 fi
 printf '  Docker: Docker\047s official APT repo (%s/%s), including Compose + Buildx\n' "$DOCKER_DISTRO" "$DOCKER_CODENAME"
 printf '  Shell:  preserve ~/.zshrc; add integration and eza icons\n\n'
@@ -568,8 +582,8 @@ install_nodejs() {
 }
 
 install_helm() {
-    if ((! CONFIGURE_NEOVIM)); then
-        result 'Skipped; Neovim configuration disabled'
+    if ((! WITH_HELM)); then
+        result 'Skipped; Helm is opt-in (use --with-helm)'
         return
     fi
     local version asset checksum
@@ -910,7 +924,7 @@ EOF
 
 verify_neovim_dependencies() {
     local command
-    for command in node npm npx python3 go gofmt helm rg cc make unzip tree-sitter prettier "${NVIM_MASON_COMMANDS[@]}"; do
+    for command in node npm npx python3 go gofmt rg cc make unzip tree-sitter prettier "${NVIM_MASON_COMMANDS[@]}"; do
         # shellcheck disable=SC2016
         as_user sh -c 'command -v "$1"' dependency "$command"
     done
@@ -919,7 +933,9 @@ verify_neovim_dependencies() {
     as_user python3 --version
     as_user python3 -c 'import venv, ensurepip'
     as_user go version
-    as_user helm version --short
+    if ((WITH_HELM)); then
+        as_user helm version --short
+    fi
     as_user npx --offline --no-install prettier --version
     as_user stylua --version
     as_user shfmt --version
@@ -1150,6 +1166,8 @@ verify_tools() {
         as_user tree-sitter --version
         as_user test -r "$TARGET_HOME/.config/nvim/init.lua"
         verify_neovim_dependencies
+    elif ((WITH_HELM)); then
+        as_user helm version --short
     fi
     # No plugins, user init, or ShaDa writes during the smoke check.
     as_user "$BIN_DIR/nvim" --headless -u NONE -i NONE '+quit'
@@ -1167,7 +1185,7 @@ run_step 'Install latest stable Neovim' install_github_tool neovim nvim neovim/n
 run_step 'Install Tree-sitter CLI for Neovim' install_treesitter_cli
 run_step 'Install current Node.js LTS and npm' install_nodejs
 run_step 'Install Go runtime and gofmt' install_go
-run_step 'Install Helm CLI for the Helm plugin' install_helm
+run_step 'Optional Helm CLI' install_helm
 run_step 'Configure Neovim from rice' configure_neovim
 run_step 'Install and verify Neovim dependency tools' install_neovim_dependencies
 run_step 'Install Docker from its official APT repository' install_docker

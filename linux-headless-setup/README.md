@@ -60,6 +60,7 @@ It installs missing APT packages, not a full system upgrade.
 | `--no-start-docker` | Suppress Docker/containerd start/restart hooks during APT installation and skip explicit service startup. Useful in containers. Does not stop an already-running daemon. |
 | `--upgrade-docker` | Upgrade official Docker packages to the latest APT candidates. Package upgrades may restart Docker and interrupt containers. |
 | `--no-neovim-config` | Keep the existing Neovim configuration; skip rice and its runtime/tool/parser setup. |
+| `--with-helm` | Opt in to the Helm 3 CLI. With Neovim config enabled, also install Helm LS, its YAML language-server dependency, and the Helm parser. |
 | `--docker-codename NAME` | Override the repository suite with the corresponding Debian/Ubuntu base release for a derivative. |
 | `--plain` | No colors or spinner. `NO_COLOR=1` also disables colors. |
 | `--help`, `-h` | Show usage. |
@@ -84,7 +85,8 @@ sudo --preserve-env=GITHUB_TOKEN ./linux-headless-setup/setup.sh --yes --user "$
 | Delta | Latest stable `dandavison/delta` GitHub release; musl on amd64, GNU on arm64; SHA-256 verified. |
 | Neovim | Latest stable `neovim/neovim` GitHub release; full Linux tarball, **not APT or AppImage**. Includes its runtime and needs no FUSE. |
 | Neovim config | The `nvim/.config/nvim` folder from `guneet-xyz/rice`, linked into the target user's `~/.config/nvim`. No other rice packages are installed. |
-| Neovim runtimes | Current Node.js **LTS** (including npm/npx), stable Go (including gofmt), and compatible Helm 3, from official archives with published SHA-256 checksums. Python 3, pip, and venv support come from APT. |
+| Neovim runtimes | Current Node.js **LTS** (including npm/npx) and stable Go (including gofmt), from official archives with published SHA-256 checksums. Python 3, pip, and venv support come from APT. |
+| Optional Helm | Helm 3 from its checksum-verified official archive, plus Helm LS/YAML language tools and a Helm parser when using rice. Installed **only with `--with-helm`**. |
 | Neovim dependencies | APT build tools, unzip, ripgrep, X11/Wayland clipboard clients, plus the official Tree-sitter CLI. Lazy/Mason install and verify the enabled profile's plugins, language servers, formatters, and native parsers as the target user. |
 | Docker | **Docker's official APT repository**, following its [Debian](https://docs.docker.com/engine/install/debian/#install-using-the-repository) / [Ubuntu](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository) instructions. Installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin`. Never installs the distribution's `docker.io`. |
 
@@ -178,7 +180,7 @@ Neovim **as the target account** (normally an unprivileged user; selecting root
 explicitly means the configuration runs as root). It supplies Node.js LTS,
 npm/npx, Go/gofmt, Python with pip/venv support, compiler/build tools, and ripgrep.
 It installs the selected language servers and formatters through Lazy/Mason,
-and extra native parsers needed by the Helm and MDX plugins. Prettier is installed
+and extra native parsers needed by the MDX plugin. Prettier is installed
 in `~/.local/share/linux-headless-setup/npm` so the config's `npx prettier` command
 works without an interactive package-install prompt. The managed shell exports
 that npm prefix when no custom prefix is already set and exposes Mason's tools.
@@ -188,6 +190,20 @@ tool-to-feature mapping, and intentionally excluded optional tools. First setup
 requires additional HTTPS access to npm, PyPI, Rust distribution endpoints,
 and Mason/Tree-sitter package sources. No configuration files in rice are patched.
 Use `:Lazy`, `:Mason`, and `:checkhealth` to inspect the resulting setup.
+
+Helm is **not installed by default**: it is not needed for Neovim itself, and the
+current rice profile does not register the Helm language server. Use
+`--with-helm` when you want Helm development tooling:
+
+```bash
+sudo ./linux-headless-setup/setup.sh --yes --user "$USER" --with-helm
+```
+
+This enables the Helm CLI, Helm LS, its YAML server, and the Helm parser without
+changing rice's LSP activation settings. With `--no-neovim-config`, only the
+Helm CLI is installed. YAML formatting/highlighting remains part of the default
+Neovim setup. Rerunning without the flag does not uninstall previously installed
+tools or remove plugins declared by your own rice configuration.
 
 `xclip` and `wl-clipboard` are installed for sessions with an X11/Wayland display;
 they do not create a display server or make a remote SSH clipboard available by

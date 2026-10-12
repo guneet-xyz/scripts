@@ -12,7 +12,7 @@ The installer leaves these configuration files unchanged.
 | Node.js, npm, npx | JSON/TypeScript/YAML language tools and `npx prettier`. The currently published TypeScript language server requires Node **≥22.22.2**, newer than Debian 12/Ubuntu 24.04's Node 18. | Latest Node LTS archive from nodejs.org, published SHA-256 checked; includes npm/npx. |
 | Python 3, pip, venv | Mason's Python language server and Python/MDX formatters; avoid writing to distro Python under PEP 668. | APT `python3`, `python3-pip`, `python3-venv`. |
 | Go, gofmt | `gofmt` is explicitly selected for Go files. | Latest stable official Go archive; published SHA-256 checked. |
-| Helm CLI | `helm-ls` delegates chart rendering/linting/dependency handling to Helm. | Latest stable compatible Helm 3 archive from get.helm.sh, published SHA-256 checked. |
+| Optional Helm CLI | `helm-ls` delegates chart rendering/linting/dependency handling to Helm, but the profile does not currently register the Helm server. | **Only with `--with-helm`**: compatible Helm 3 archive from get.helm.sh, published SHA-256 checked. |
 | ripgrep (`rg`) | Telescope uses `rg` explicitly for both file finding and live grep. | APT `ripgrep`. |
 | Git | Lazy/plugin installs and Diffview/Gitsigns. | APT `git`. |
 | C/C++ compiler, make | Native Telescope fzf extension, LuaSnip regex support, Tree-sitter parsers. | APT `build-essential`. |
@@ -29,12 +29,13 @@ The installer leaves these configuration files unchanged.
 | `pylsp` | `pylsp` | `python-lsp-server` |
 | `jsonls` | `vscode-json-language-server` | `json-lsp` |
 | `ts_ls` | `typescript-language-server` | `typescript-language-server` |
-| Helm plugin's external tooling | `helm_ls` | `helm-ls` |
-| Helm's YAML integration | `yaml-language-server` | `yaml-language-server` |
+| Optional Helm plugin tooling (`--with-helm`) | `helm_ls` | `helm-ls` |
+| Optional Helm YAML integration (`--with-helm`) | `yaml-language-server` | `yaml-language-server` |
 
 Installing Helm tooling does not implicitly enable an LSP server that the rice
-configuration has not registered. Helm LSP setup still belongs in the upstream
-config. Project-specific chart dependencies and `helm dependency build` are not
+configuration has not registered. These tools are excluded by default. Helm LSP
+setup still belongs in the upstream config. Project-specific chart dependencies
+and `helm dependency build` are not
 run by this machine setup script.
 
 ## Every formatter selected by `formatters_by_ft`
@@ -57,12 +58,15 @@ installation; failures stop setup with the detailed log path.
 ## Native parser dependencies
 
 The bootstrap covers rice's existing parser list plus TypeScript, TSX,
-JavaScript, YAML, Helm, Python, Go, JSON, C++, Java, and Astro. This includes the
-extra grammars required by the `mdx.nvim` and `helm-ls.nvim` plugins. Parser
+JavaScript, YAML, Python, Go, JSON, C++, Java, and Astro. This includes the
+extra grammars required by `mdx.nvim`; the Helm grammar is added only with
+`--with-helm`. Parser
 installation and loading are awaited rather than merely queued in the background.
 
 ## Intentionally not installed
 
+- Helm CLI, Helm LS, its YAML language server, and the Helm grammar are opt-in
+  via `--with-helm`; their installation is not implied by the general Neovim setup.
 - `biome` is defined as a formatter override but is **not selected** by any
   `formatters_by_ft` entry; those filetypes currently use Prettier.
 - The debug and lint Kickstart imports are commented out, so Delve/DAP adapters
