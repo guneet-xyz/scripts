@@ -12,6 +12,7 @@ CHANGE_SHELL=1
 DOCKER_GROUP=0
 START_DOCKER=1
 UPGRADE_DOCKER=0
+SKIP_DOCKER=0
 CONFIGURE_NEOVIM=1
 WITH_HELM=0
 RICE_REPO=https://github.com/guneet-xyz/rice.git
@@ -50,6 +51,7 @@ Supports Debian-based Linux on amd64 and arm64. Needs root or sudo.
   --docker-group        Grant the user root-equivalent Docker group access.
   --no-start-docker     Suppress Docker/containerd starts, including APT hooks.
   --upgrade-docker      Upgrade official Docker packages (may restart Docker).
+  --skip-docker         Leave Docker packages, services, and permissions alone.
   --no-neovim-config    Keep Neovim config; skip rice and editor dependency setup.
   --with-helm           Opt in to Helm CLI and optional Neovim Helm tooling.
   --docker-codename NAME  Use a base Debian/Ubuntu codename for a derivative.
@@ -84,6 +86,7 @@ while (($#)); do
         --docker-group) DOCKER_GROUP=1 ;;
         --no-start-docker) START_DOCKER=0 ;;
         --upgrade-docker) UPGRADE_DOCKER=1 ;;
+        --skip-docker) SKIP_DOCKER=1 ;;
         --no-neovim-config) CONFIGURE_NEOVIM=0 ;;
         --with-helm) WITH_HELM=1 ;;
         --docker-codename)
@@ -100,6 +103,10 @@ while (($#)); do
     esac
     shift
 done
+
+if ((SKIP_DOCKER && (UPGRADE_DOCKER || DOCKER_GROUP))); then
+    die '--skip-docker cannot be combined with --upgrade-docker or --docker-group.'
+fi
 
 if ((WITH_HELM && CONFIGURE_NEOVIM)); then
     NVIM_MASON_PACKAGES+=(helm-ls yaml-language-server)
@@ -120,8 +127,10 @@ else
     DOCKER_DISTRO=debian
     DOCKER_CODENAME=${DOCKER_CODENAME:-${VERSION_CODENAME:-}}
 fi
-[[ $DOCKER_CODENAME =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
-    die 'Cannot determine a safe Docker suite. Use --docker-codename with the corresponding Debian/Ubuntu release.'
+if ((! SKIP_DOCKER)); then
+    [[ $DOCKER_CODENAME =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
+        die 'Cannot determine a safe Docker suite. Use --docker-codename with the corresponding Debian/Ubuntu release.'
+fi
 USER_ENTRY=$(getent passwd "$TARGET_USER") || die "User '$TARGET_USER' does not exist. Create it first."
 IFS=: read -r TARGET_USER _ TARGET_UID TARGET_GID _ TARGET_HOME TARGET_SHELL <<<"$USER_ENTRY"
 [[ $TARGET_HOME == /* && $TARGET_HOME != / && -d $TARGET_HOME ]] ||
@@ -183,7 +192,11 @@ if ((WITH_HELM)); then
 else
     printf '  Helm:   skipped by default (use --with-helm to enable)\n'
 fi
-printf '  Docker: Docker\047s official APT repo (%s/%s), including Compose + Buildx\n' "$DOCKER_DISTRO" "$DOCKER_CODENAME"
+if ((SKIP_DOCKER)); then
+    printf '  Docker: skipped; leave existing installation and services alone\n'
+else
+    printf '  Docker: Docker\047s official APT repo (%s/%s), including Compose + Buildx\n' "$DOCKER_DISTRO" "$DOCKER_CODENAME"
+fi
 printf '  Shell:  preserve ~/.zshrc; add integration and eza icons\n\n'
 ((! DOCKER_GROUP)) || printf '%sWarning:%s Docker group membership grants root-equivalent access.\n' "$YELLOW" "$RESET"
 ((! UPGRADE_DOCKER)) || printf '%sWarning:%s Upgrading Docker packages may restart the daemon/containers.\n' "$YELLOW" "$RESET"
@@ -371,7 +384,10 @@ as_user() {
 install_apt_packages() {
     local package
     local missing=()
-    local packages=(ca-certificates curl jq git less tar xz-utils procps iptables util-linux passwd zsh btop)
+    local packages=(ca-certificates curl jq git less tar xz-utils procps util-linux passwd zsh btop)
+    if ((! SKIP_DOCKER)); then
+        packages+=(iptables)
+    fi
     if ((CONFIGURE_NEOVIM)); then
         packages+=(build-essential unzip ripgrep python3 python3-venv python3-pip xclip wl-clipboard)
     fi
@@ -622,6 +638,9 @@ install_go() {
 }
 
 check_docker_conflicts() {
+    if ((SKIP_DOCKER)); then
+        return
+    fi
     local package executable path
     local conflicts=()
     for package in docker.io docker-compose docker-compose-v2 docker-doc docker-buildx \
@@ -629,7 +648,7 @@ check_docker_conflicts() {
         package_installed "$package" && conflicts+=("$package")
     done
     if ((${#conflicts[@]})); then
-        die "Conflicting distribution Docker/runtime packages: ${conflicts[*]}. Review and remove them before rerunning, per Docker's installation docs. Nothing was removed."
+        die "Conflicting distribution Docker/runtime packages: ${conflicts[*]}. Use --skip-docker to keep them and set up the other tools. Migrating to Docker CE requires reviewing/removing conflicts per Docker's docs. Nothing was removed."
     fi
     for executable in docker dockerd; do
         path=$(command -v "$executable" || true)
@@ -673,6 +692,10 @@ EOF
 }
 
 install_docker() {
+    if ((SKIP_DOCKER)); then
+        result 'Skipped; existing Docker packages and repository configuration left untouched'
+        return
+    fi
     local key=/etc/apt/keyrings/docker.asc source=/etc/apt/sources.list.d/docker.sources
     local uri="https://download.docker.com/linux/$DOCKER_DISTRO" existing package candidate
     local refresh=0 missing=()
@@ -739,6 +762,11 @@ EOF
 }
 
 configure_docker_service() {
+    if ((SKIP_DOCKER)); then
+        DOCKER_SERVICE_STATE=skipped
+        result 'Skipped; Docker/containerd service state left untouched'
+        return
+    fi
     if ((! START_DOCKER)); then
         DOCKER_SERVICE_STATE=not-started
         result 'Automatic starts suppressed; daemon startup deliberately skipped'
@@ -1155,13 +1183,19 @@ EOF
 
 verify_tools() {
     local command executable
-    for command in zsh starship zoxide eza btop nvim docker git delta; do
+    local commands=(zsh starship zoxide eza btop nvim git delta)
+    if ((! SKIP_DOCKER)); then
+        commands+=(docker)
+    fi
+    for command in "${commands[@]}"; do
         executable=$(command -v "$command")
         printf '%s\n' "$executable"
         as_user "$executable" --version
     done
-    as_user /usr/bin/docker compose version
-    as_user /usr/bin/docker buildx version
+    if ((! SKIP_DOCKER)); then
+        as_user /usr/bin/docker compose version
+        as_user /usr/bin/docker buildx version
+    fi
     if ((CONFIGURE_NEOVIM)); then
         as_user tree-sitter --version
         as_user test -r "$TARGET_HOME/.config/nvim/init.lua"
@@ -1171,7 +1205,7 @@ verify_tools() {
     fi
     # No plugins, user init, or ShaDa writes during the smoke check.
     as_user "$BIN_DIR/nvim" --headless -u NONE -i NONE '+quit'
-    result 'All nine tools verified; Neovim headless startup passed'
+    result "All ${#commands[@]} requested tools verified; Neovim headless startup passed"
 }
 
 printf '\nDetailed log: %s\n\n' "$LOG_FILE"
@@ -1204,6 +1238,7 @@ if ((DOCKER_GROUP && TARGET_UID != 0)); then
     printf 'Log out and back in before using Docker without sudo.\n'
 fi
 case "$DOCKER_SERVICE_STATE" in
+    skipped) printf 'Docker setup was skipped; no Docker package, service, or group changes were requested.\n' ;;
     running) printf 'Docker is running. Optional end-to-end check: sudo docker run --rm hello-world\n' ;;
     not-started | no-systemd)
         printf 'Docker daemon startup was skipped. On a systemd host: sudo systemctl enable --now docker\n'
@@ -1211,7 +1246,9 @@ case "$DOCKER_SERVICE_STATE" in
         ;;
 esac
 printf 'For eza/Neovim icons, select a Nerd Font in your local terminal (including SSH clients).\n'
-if [[ -n ${BASH_SOURCE[0]:-} ]]; then
+if ((SKIP_DOCKER)); then
+    printf 'To migrate existing Docker to Docker CE, plan and review that migration separately.\n'
+elif [[ -n ${BASH_SOURCE[0]:-} ]]; then
     printf 'Update Docker later through APT, or run: sudo bash %q --user %q --yes --upgrade-docker\n' \
         "$(readlink -f -- "${BASH_SOURCE[0]}")" "$TARGET_USER"
 else

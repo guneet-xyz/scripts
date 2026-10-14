@@ -19,6 +19,7 @@ TEST_SUITE=git ./tests/linux-headless-setup/test-in-docker.sh ubuntu:24.04
 # Local renderer tests; needs Python 3, no Docker or package installs:
 python3 ./tests/linux-headless-setup/ui-smoke.py
 python3 ./tests/linux-headless-setup/helm-options-smoke.py
+python3 ./tests/linux-headless-setup/docker-options-smoke.py
 ```
 
 The runner resolves paths relative to its own location, so it also works when
@@ -57,6 +58,10 @@ flag orders, unchanged YAML/MDX dependencies, and absence of default Helm
 network/install calls without executing any machine setup steps.
 When `jq` is available it also runs the real opt-in version/checksum/URL control
 flow with network downloads and archive installation mocked.
+The Docker option suite simulates the reported `docker.io`/`docker-buildx`/
+`containerd`/`runc` conflicts. It checks the normal refusal, safe opt-out,
+conflicting flags, and absence of Docker package/download/service/verification
+calls, without changing host packages or requiring Docker.
 The local UI suite uses pseudo-terminals and pipes to check live stdout/stderr,
 dimmed output, a blank spacer above a single bottom status line, wrapped and
 partial lines, color-free output, cursor restoration, unmodified persistent

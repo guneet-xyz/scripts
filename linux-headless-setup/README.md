@@ -30,6 +30,14 @@ curl -fsSL https://raw.githubusercontent.com/guneet-xyz/scripts/refs/heads/main/
   | sudo bash -s -- --yes
 ```
 
+If the machine already runs Docker, leave its packages/services alone while
+installing the other tools:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/guneet-xyz/scripts/refs/heads/main/linux-headless-setup/setup.sh \
+  | sudo bash -s -- --yes --skip-docker
+```
+
 Review [the installer](setup.sh) first: this executes remote code as root.
 The installer configures the invoking user's account rather than root's.
 `--yes` skips the confirmation prompt because Bash is reading the script from
@@ -59,6 +67,7 @@ It installs missing APT packages, not a full system upgrade.
 | `--docker-group` | Opt in to Docker access without sudo; **grants root-equivalent privileges**. |
 | `--no-start-docker` | Suppress Docker/containerd start/restart hooks during APT installation and skip explicit service startup. Useful in containers. Does not stop an already-running daemon. |
 | `--upgrade-docker` | Upgrade official Docker packages to the latest APT candidates. Package upgrades may restart Docker and interrupt containers. |
+| `--skip-docker` | Skip Docker conflict checks, repository/package installation, service/group changes, and Docker verification. Does not require Docker to be installed. Cannot be combined with `--upgrade-docker` or `--docker-group`. |
 | `--no-neovim-config` | Keep the existing Neovim configuration; skip rice and its runtime/tool/parser setup. |
 | `--with-helm` | Opt in to the Helm 3 CLI. With Neovim config enabled, also install Helm LS, its YAML language-server dependency, and the Helm parser. |
 | `--docker-codename NAME` | Override the repository suite with the corresponding Debian/Ubuntu base release for a derivative. |
@@ -127,7 +136,8 @@ manage that tool.
   is explicitly supplied. Normal APT upgrades also update Docker afterward.
 - Conflicting distro Docker/containerd/runc packages cause an explicit error
   **before installation**; they are never silently removed. Follow Docker's
-  linked installation docs to review/remove conflicts yourself. Unmanaged Docker
+  linked installation docs to plan any migration. Use `--skip-docker` to keep
+  the current Docker installation and set up the other tools. Unmanaged Docker
   executables that would shadow the APT binaries also cause an error.
 - Installation is locked against concurrent runs. Downloads and staging files
   are cleaned up on exit; completed installations remain usable if a later step
@@ -253,6 +263,18 @@ and `GIT_PAGER` can still override the global pager. No Git name/email or merge
 conflict style is chosen by the installer.
 
 ## Docker notes
+
+**Existing Docker hosts:** the distribution packages `docker.io`, `containerd`,
+`runc`, and similar packages conflict with Docker CE's `containerd.io` bundle.
+The default install refuses to replace them automatically. Use `--skip-docker`
+to bypass all Docker-specific work, including Compose/Buildx checks, and keep
+the existing installation unchanged. `--no-start-docker` is different: it still
+installs Docker CE packages and therefore does not bypass package conflicts.
+
+Do not remove a running server's Docker/runtime packages merely to get past the
+check. Migrating an existing Docker host to Docker CE should be a separate,
+reviewed operation with backups and an appropriate maintenance window. This
+installer does not perform that migration or stop running workloads for you.
 
 The repository is selected from `/etc/os-release`, using Ubuntu's base codename
 where available (for example, on Linux Mint), or Debian's version codename.

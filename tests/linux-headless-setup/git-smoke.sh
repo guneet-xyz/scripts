@@ -109,7 +109,7 @@ runuser -u "$USER_NAME" -- delta --version
 useradd --create-home --shell /bin/bash git-custom
 printf '%s\n' "alias gs='echo personal-status'" "alias v='echo personal-editor'" >/home/git-custom/.zshrc
 chown git-custom:git-custom /home/git-custom/.zshrc
-bash "$SETUP" --yes --plain --user git-custom --no-change-shell --no-start-docker --no-neovim-config --with-helm
+bash "$SETUP" --yes --plain --user git-custom --no-change-shell --skip-docker --no-neovim-config --with-helm
 runuser -u git-custom -- helm version --short
 [[ -L /usr/local/bin/helm ]] || fail '--with-helm did not install the CLI.'
 [[ ! -e /home/git-custom/.local/share/nvim/mason ]] || fail 'CLI-only Helm opt-in bootstrapped Neovim tooling.'
